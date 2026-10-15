@@ -598,6 +598,65 @@ class TestHyundaiFingerprint:
     assert len(radar_data.points) == 16
     assert radar_data.points[0].dRel == pytest.approx(25.0)
 
+  def test_kia_stinger_radar(self):
+    stinger_fingerprint = gen_empty_fingerprint()
+    stinger_radar_config = get_radar_track_config(CAR.KIA_STINGER_2022)
+    assert stinger_radar_config is not None
+    assert stinger_radar_config.radar_type == "stinger"
+    assert stinger_radar_config.bus == 1
+    assert stinger_radar_config.msg_count == 30
+    assert not radar_tracks_available(stinger_radar_config, stinger_fingerprint)
+
+    for addr in range(stinger_radar_config.start_addr, stinger_radar_config.start_addr + stinger_radar_config.msg_count):
+      stinger_fingerprint[stinger_radar_config.bus][addr] = stinger_radar_config.expected_length
+    assert radar_tracks_available(stinger_radar_config, stinger_fingerprint)
+
+    # With stock longitudinal, radar tracks are enabled
+    CP = CarInterface.get_params(CAR.KIA_STINGER_2022, stinger_fingerprint, [],
+                                 False, False, False, None)
+    assert not CP.radarUnavailable
+
+    # With openpilot longitudinal, Stinger now keeps radar tracks enabled (RADAR_LIVE_LONGITUDINAL_CAR)
+    CP_op_long = CarInterface.get_params(CAR.KIA_STINGER_2022, stinger_fingerprint, [],
+                                         True, False, False, None)
+    assert not CP_op_long.radarUnavailable
+
+    radar = RadarInterface(CP)
+    packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
+
+    # Send wheel speed 50 km/h on bus 0 (50 km/h = 13.8889 m/s)
+    whl_msg = packer.make_can_msg("WHL_SPD11", 0, {"WHL_SPD_FL": 50.0, "WHL_SPD_FR": 50.0})
+
+    # Golden triplet payloads (object_id=24, distance=10.85, lateral=-0.2, absolute_speed=5.15)
+    departing = tuple(bytes.fromhex(dat) for dat in ("06ca7fcb8379f530", "8fc973d946180b18", "89504654ffe604e8"))
+    can_frames = [(whl_msg[0], whl_msg[1], 0)]
+    for i, payload in enumerate(departing):
+      can_frames.append((0x238 + i, payload, 1))
+    # Trigger msg 0x255
+    can_frames.append((0x255, bytes(8), 1))
+
+    radar_data = radar.update([(1_000_000_000, can_frames)])
+    assert radar_data is not None
+    assert len(radar_data.points) == 1
+    pt = radar_data.points[0]
+    assert pt.measured
+    assert pt.dRel == pytest.approx(10.85)
+    assert pt.yRel == pytest.approx(-0.2)
+    # vRel = absolute_speed (5.15) - v_ego (50 * 1000 / 3600 = 13.888889) = -8.738889
+    v_ego = 50.0 * (1000.0 / 3600.0)
+    assert pt.vRel == pytest.approx(5.15 - v_ego)
+
+    # Next cycle without radar packets should mark pt as unmeasured then drop after 100 ms
+    radar_data2 = radar.update([(1_050_000_000, [(0x255, bytes(8), 1)])])
+    assert radar_data2 is not None
+    assert len(radar_data2.points) == 1
+    assert not radar_data2.points[0].measured
+
+    # After 100 ms (150 ms > 100 ms), track is purged
+    radar_data3 = radar.update([(1_200_000_000, [(0x255, bytes(8), 1)])])
+    assert radar_data3 is not None
+    assert len(radar_data3.points) == 0
+
     other_config = get_radar_track_config(CAR.HYUNDAI_IONIQ_5)
     assert other_config.radar_type == "mrr30"
     assert other_config.dbc_name is None
@@ -1440,6 +1499,41 @@ class TestHyundaiFingerprint:
 
     raw_button_msg = packer.make_can_msg("BCM_PO_11", 0, {"RAY_LKAS_BTN": 1})
     assert raw_button_msg[1][0] == 0x10
+
+  def test_kia_stinger_lfa_button(self):
+    toggles = get_test_toggles()
+    CP = CarInterface.get_params(CAR.KIA_STINGER_2022, gen_empty_fingerprint(), [], False, False, False, toggles)
+    FPCP = CarInterface.get_starpilot_params(CAR.KIA_STINGER_2022, gen_empty_fingerprint(), [], CP, toggles)
+    car_state = CarState(CP, FPCP)
+    can_parsers = car_state.get_can_parsers(CP)
+    packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
+
+    def update(lda_btn: int, frame: int):
+      msg = packer.make_can_msg("BCM_PO_11", 0, {"LDA_BTN": lda_btn})
+      can_parsers[Bus.pt].update([(frame, [msg])])
+      return car_state.update(can_parsers, toggles)[0]
+
+    update(0, 1)
+
+    # First press: emits pressed=True
+    ret = update(1, 2)
+    assert any(be.type == ButtonType.lkas and be.pressed for be in ret.buttonEvents)
+
+    # Holding: stays pressed, no new button events
+    ret = update(1, 3)
+    assert not any(be.type == ButtonType.lkas for be in ret.buttonEvents)
+
+    # Release: emits pressed=False
+    ret = update(0, 4)
+    assert any(be.type == ButtonType.lkas and not be.pressed for be in ret.buttonEvents)
+
+    # Subsequent press: emits pressed=True
+    ret = update(1, 5)
+    assert any(be.type == ButtonType.lkas and be.pressed for be in ret.buttonEvents)
+
+    # Release again: emits pressed=False
+    ret = update(0, 6)
+    assert any(be.type == ButtonType.lkas and not be.pressed for be in ret.buttonEvents)
 
   def test_non_ray_does_not_use_ray_lkas_signal(self):
     CP = CarInterface.get_params(CAR.KIA_FORTE_2021_NON_SCC, gen_empty_fingerprint(), [], False, False, False, None)
