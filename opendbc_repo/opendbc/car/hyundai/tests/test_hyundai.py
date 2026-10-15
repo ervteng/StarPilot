@@ -599,25 +599,28 @@ class TestHyundaiFingerprint:
     assert radar_data.points[0].dRel == pytest.approx(25.0)
 
   def test_kia_stinger_radar(self):
-    stinger_fingerprint = gen_empty_fingerprint()
-    stinger_radar_config = get_radar_track_config(CAR.KIA_STINGER_2022)
-    assert stinger_radar_config is not None
-    assert stinger_radar_config.radar_type == "stinger"
-    assert stinger_radar_config.bus == 1
-    assert stinger_radar_config.msg_count == 30
-    assert not radar_tracks_available(stinger_radar_config, stinger_fingerprint)
+    # Older pre-2022 Stinger must NOT have radar track config
+    assert get_radar_track_config(CAR.KIA_STINGER) is None
 
-    for addr in range(stinger_radar_config.start_addr, stinger_radar_config.start_addr + stinger_radar_config.msg_count):
-      stinger_fingerprint[stinger_radar_config.bus][addr] = stinger_radar_config.expected_length
-    assert radar_tracks_available(stinger_radar_config, stinger_fingerprint)
+    stinger_2022_fingerprint = gen_empty_fingerprint()
+    stinger_2022_radar_config = get_radar_track_config(CAR.KIA_STINGER_2022)
+    assert stinger_2022_radar_config is not None
+    assert stinger_2022_radar_config.radar_type == "stinger_2022"
+    assert stinger_2022_radar_config.bus == 1
+    assert stinger_2022_radar_config.msg_count == 30
+    assert not radar_tracks_available(stinger_2022_radar_config, stinger_2022_fingerprint)
+
+    for addr in range(stinger_2022_radar_config.start_addr, stinger_2022_radar_config.start_addr + stinger_2022_radar_config.msg_count):
+      stinger_2022_fingerprint[stinger_2022_radar_config.bus][addr] = stinger_2022_radar_config.expected_length
+    assert radar_tracks_available(stinger_2022_radar_config, stinger_2022_fingerprint)
 
     # With stock longitudinal, radar tracks are enabled
-    CP = CarInterface.get_params(CAR.KIA_STINGER_2022, stinger_fingerprint, [],
+    CP = CarInterface.get_params(CAR.KIA_STINGER_2022, stinger_2022_fingerprint, [],
                                  False, False, False, None)
     assert not CP.radarUnavailable
 
-    # With openpilot longitudinal, Stinger now keeps radar tracks enabled (RADAR_LIVE_LONGITUDINAL_CAR)
-    CP_op_long = CarInterface.get_params(CAR.KIA_STINGER_2022, stinger_fingerprint, [],
+    # With openpilot longitudinal, 2022+ Stinger keeps radar tracks enabled (RADAR_LIVE_LONGITUDINAL_CAR)
+    CP_op_long = CarInterface.get_params(CAR.KIA_STINGER_2022, stinger_2022_fingerprint, [],
                                          True, False, False, None)
     assert not CP_op_long.radarUnavailable
 
