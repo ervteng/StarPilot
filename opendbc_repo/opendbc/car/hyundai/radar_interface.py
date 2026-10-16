@@ -29,7 +29,6 @@ STINGER_2022_RADAR_START_ADDR = 0x238
 STINGER_2022_RADAR_SLOT_COUNT = 10
 STINGER_2022_RADAR_MSG_COUNT = 30
 STINGER_2022_MAX_TRIPLET_SPAN_NS = 20_000_000
-STINGER_2022_MAX_OBJECT_AGE_NS = 100_000_000
 
 
 def _field(dat: bytes, start: int, size: int) -> int:
@@ -50,9 +49,6 @@ class Stinger2022CandidateObject:
     if not math.isfinite(ego_speed):
       raise ValueError("ego speed must be finite")
     return self.absolute_speed - ego_speed
-
-
-CandidateObject = Stinger2022CandidateObject
 
 
 def decode_stinger_2022_triplet(slot: int, payloads: tuple[bytes, ...]) -> Stinger2022CandidateObject | None:
@@ -76,9 +72,6 @@ def decode_stinger_2022_triplet(slot: int, payloads: tuple[bytes, ...]) -> Sting
   )
 
 
-decode_triplet = decode_stinger_2022_triplet
-
-
 class Stinger2022ObjectDecoder:
   def __init__(self):
     self.frames: dict[tuple[int, int], tuple[int, bytes]] = {}
@@ -92,16 +85,15 @@ class Stinger2022ObjectDecoder:
       return None
     triple = [self.frames[slot, i] for i in range(3)]
     times = [t for t, _ in triple]
-    if max(times) != timestamp_ns or max(times) - min(times) > STINGER_2022_MAX_TRIPLET_SPAN_NS:
-      return None
 
     # Consume the complete cycle so repeated final frames cannot reuse old parts.
     for i in range(3):
       del self.frames[slot, i]
+
+    if max(times) != timestamp_ns or max(times) - min(times) > STINGER_2022_MAX_TRIPLET_SPAN_NS:
+      return None
+
     return decode_stinger_2022_triplet(slot, tuple(dat for _, dat in triple))
-
-
-StingerObjectDecoder = Stinger2022ObjectDecoder
 
 
 
@@ -200,9 +192,7 @@ class RadarInterface(RadarInterfaceBase):
     if self.stinger_2022_radar:
       self.trigger_msg = STINGER_2022_RADAR_START_ADDR + STINGER_2022_RADAR_MSG_COUNT - 1
       self.stinger_2022_decoder = Stinger2022ObjectDecoder()
-      self.stinger_2022_objects: dict[int, tuple[int, Stinger2022CandidateObject]] = {}
-      self.stinger_2022_last_seen_ns: dict[int, int] = {}
-      self.latest_can_ts_ns = 0
+      self.stinger_2022_objects: dict[int, Stinger2022CandidateObject] = {}
       self.v_ego = 0.0
     else:
       self.trigger_msg = (self.radar_config.start_addr + self.radar_config.can_parser_msg_count - 1
@@ -310,16 +300,15 @@ class RadarInterface(RadarInterfaceBase):
     if self.radar_config is None:
       return
 
-    if "WHL_SPD11" in self.rcp.vl:
+    if "WHL_SPD11" in self.rcp.vl and self.rcp.ts_nanos["WHL_SPD11"]["WHL_SPD_FL"] > 0:
       whl = self.rcp.vl["WHL_SPD11"]
-      self.v_ego = 0.5 * (whl["WHL_SPD_FL"] + whl["WHL_SPD_FR"]) * CV.KPH_TO_MS
+      wheel_speed = 0.25 * (whl["WHL_SPD_FL"] + whl["WHL_SPD_FR"] + whl["WHL_SPD_RL"] + whl["WHL_SPD_RR"])
+      self.v_ego = wheel_speed * CV.KPH_TO_MS * self.CP.wheelSpeedFactor
 
     start_addr = self.radar_config.start_addr
     end_addr = start_addr + self.radar_config.msg_count
 
     for timestamp_ns, frames in can_strings:
-      if timestamp_ns > self.latest_can_ts_ns:
-        self.latest_can_ts_ns = timestamp_ns
       for address, dat, src in frames:
         if src != self.radar_config.bus or not (start_addr <= address < end_addr) or len(dat) != 8:
           continue
@@ -327,23 +316,20 @@ class RadarInterface(RadarInterfaceBase):
         self.updated_messages.add(address)
         obj = self.stinger_2022_decoder.update(timestamp_ns, address, bytes(dat), src)
         if obj is not None:
-          self.stinger_2022_objects[obj.object_id] = (timestamp_ns, obj)
+          self.stinger_2022_objects[obj.object_id] = obj
 
   def _update_stinger_2022(self, updated_messages):
     ret = structs.RadarData()
     if self.rcp is None:
       return ret
 
-    if not self.rcp.can_valid:
+    if not self.rcp.can_valid or self.rcp.ts_nanos["WHL_SPD11"]["WHL_SPD_FL"] == 0:
       ret.errors.canError = True
+      return ret
 
-    now_ns = self.latest_can_ts_ns
-
-
-    for pt in self.pts.values():
-      pt.measured = False
-
-    for object_id, (ts, obj) in self.stinger_2022_objects.items():
+    current_ids = set()
+    for object_id, obj in self.stinger_2022_objects.items():
+      current_ids.add(object_id)
       pt = self.pts.get(object_id)
       if pt is None:
         pt = structs.RadarData.RadarPoint()
@@ -353,19 +339,16 @@ class RadarInterface(RadarInterfaceBase):
 
       pt.measured = True
       pt.dRel = obj.distance
-      pt.yRel = obj.lateral_raw
+      pt.yRel = -obj.lateral_raw  # in car frame's y axis, left is positive
       pt.vRel = obj.relative_speed(self.v_ego)
       pt.aRel = float("nan")
       pt.yvRel = float("nan")
-      self.stinger_2022_last_seen_ns[object_id] = ts
+
+    for oid in list(self.pts.keys()):
+      if oid not in current_ids:
+        del self.pts[oid]
 
     self.stinger_2022_objects.clear()
-
-    if now_ns > 0:
-      for oid in list(self.pts.keys()):
-        if now_ns - self.stinger_2022_last_seen_ns.get(oid, 0) > STINGER_2022_MAX_OBJECT_AGE_NS:
-          del self.pts[oid]
-          self.stinger_2022_last_seen_ns.pop(oid, None)
 
     ret.points = list(self.pts.values())
     return ret

@@ -627,8 +627,16 @@ class TestHyundaiFingerprint:
     radar = RadarInterface(CP)
     packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
 
-    # Send wheel speed 50 km/h on bus 0 (50 km/h = 13.8889 m/s)
-    whl_msg = packer.make_can_msg("WHL_SPD11", 0, {"WHL_SPD_FL": 50.0, "WHL_SPD_FR": 50.0})
+    # Before WHL_SPD11 is received, radar update should report canError and publish no points
+    startup_data = radar.update([(900_000_000, [(0x255, bytes(8), 1)])])
+    assert startup_data is not None
+    assert startup_data.errors.canError
+    assert len(startup_data.points) == 0
+
+    # Send wheel speed 50 km/h on bus 0 (50 km/h = 13.8889 m/s) across all 4 wheels
+    whl_msg = packer.make_can_msg("WHL_SPD11", 0, {
+      "WHL_SPD_FL": 50.0, "WHL_SPD_FR": 50.0, "WHL_SPD_RL": 50.0, "WHL_SPD_RR": 50.0,
+    })
 
     # Golden triplet payloads (object_id=24, distance=10.85, lateral=-0.2, absolute_speed=5.15)
     departing = tuple(bytes.fromhex(dat) for dat in ("06ca7fcb8379f530", "8fc973d946180b18", "89504654ffe604e8"))
@@ -644,21 +652,16 @@ class TestHyundaiFingerprint:
     pt = radar_data.points[0]
     assert pt.measured
     assert pt.dRel == pytest.approx(10.85)
-    assert pt.yRel == pytest.approx(-0.2)
+    # yRel is left-positive in car frame (-lateral_raw = -(-0.2) = +0.2)
+    assert pt.yRel == pytest.approx(0.2)
     # vRel = absolute_speed (5.15) - v_ego (50 * 1000 / 3600 = 13.888889) = -8.738889
     v_ego = 50.0 * (1000.0 / 3600.0)
     assert pt.vRel == pytest.approx(5.15 - v_ego)
 
-    # Next cycle without radar packets should mark pt as unmeasured then drop after 100 ms
+    # Next cycle without radar packets drops track immediately (matching all other Hyundai radars)
     radar_data2 = radar.update([(1_050_000_000, [(0x255, bytes(8), 1)])])
     assert radar_data2 is not None
-    assert len(radar_data2.points) == 1
-    assert not radar_data2.points[0].measured
-
-    # After 100 ms (150 ms > 100 ms), track is purged
-    radar_data3 = radar.update([(1_200_000_000, [(0x255, bytes(8), 1)])])
-    assert radar_data3 is not None
-    assert len(radar_data3.points) == 0
+    assert len(radar_data2.points) == 0
 
     other_config = get_radar_track_config(CAR.HYUNDAI_IONIQ_5)
     assert other_config.radar_type == "mrr30"
