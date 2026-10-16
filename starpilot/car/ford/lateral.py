@@ -54,6 +54,8 @@ MACH_E_UNWIND_LOOKAHEAD_EXTRA = 0.80
 MACH_E_UNWIND_FULL_LAG_CURVATURE = 0.0005
 MACH_E_UNWIND_PREVIEW_LAG_CURVATURE = 0.002
 MACH_E_UNWIND_PREVIEW_HOLD_SECONDS = 0.10
+MACH_E_UNWIND_PREVIEW_RISE_TOLERANCE = 0.0002
+MACH_E_UNWIND_RELEASE_GAIN = 0.40
 MACH_E_DIRECTION_CHANGE_MIN_SPEED = 9.0
 MACH_E_DIRECTION_CHANGE_LOOKAHEAD_RAMP_SPEED = 10.0
 MACH_E_DIRECTION_CHANGE_LOOKAHEAD_FULL_SPEED = 12.0
@@ -361,8 +363,7 @@ class FordLateralController:
       return predicted
     if desired * current <= 0.0 or desired * predicted <= 0.0 or desired * self.desired_curvature_last <= 0.0:
       return predicted
-    if (abs(desired) > abs(self.desired_curvature_last) or
-        (abs(desired) == abs(self.desired_curvature_last) and not allow_plateau)):
+    if abs(desired) >= abs(self.desired_curvature_last) and not allow_plateau:
       return predicted
     preview = self._predicted_curvature(v_ego, self._curvature_lookahead() + MACH_E_UNWIND_LOOKAHEAD_EXTRA)
     if desired * preview <= 0.0 or abs(preview) >= min(abs(desired), abs(predicted), abs(current)):
@@ -374,6 +375,18 @@ class FordLateralController:
       abs(current) - abs(preview), [0.0, MACH_E_UNWIND_PREVIEW_LAG_CURVATURE], [0.0, 1.0]))
     lag_weight = max(lag_weight, preview_lag_weight)
     return predicted + speed_weight * curvature_weight * lag_weight * (preview - predicted)
+
+  def _unwind_request(self, desired: float, predicted: float, command_predicted: float, requested: float) -> float:
+    delta = command_predicted - predicted
+    if (self.CP.carFingerprint != CAR.FORD_MUSTANG_MACH_E_MK1 or not self.CP.flags & FordFlags.CANFD or
+        not np.isfinite([desired, predicted, command_predicted, requested]).all() or
+        desired * command_predicted <= 0.0 or desired * delta >= 0.0):
+      return requested
+    release_weight = float(np.interp(abs(delta), [0.002, 0.006], [0.0, 1.0]))
+    blend = float(np.interp(abs(desired), [0.0, 0.001], [self.curvature_blend_low, self.curvature_blend_high]))
+    preview_authority = float(np.clip(blend / 0.4, 0.0, 1.0))
+    return float(np.clip(requested + MACH_E_UNWIND_RELEASE_GAIN * preview_authority * release_weight * delta,
+                         min(desired, command_predicted), max(desired, command_predicted)))
 
   def _turn_in_preview_plateau(self, desired: float, current: float, v_ego: float,
                               steering_pressed: bool, lane_change: bool) -> float:
@@ -395,7 +408,8 @@ class FordLateralController:
   def _unwind_preview_plateau(self, desired: float, v_ego: float, steering_pressed: bool, lane_change: bool) -> bool:
     if (self.CP.carFingerprint != CAR.FORD_MUSTANG_MACH_E_MK1 or not self.CP.flags & FordFlags.CANFD or
         not 5.0 < v_ego < 15.0 or steering_pressed or lane_change or
-        desired * self.desired_curvature_last <= 0.0 or abs(desired) > abs(self.desired_curvature_last)):
+        desired * self.desired_curvature_last <= 0.0 or
+        abs(desired) - abs(self.desired_curvature_last) > MACH_E_UNWIND_PREVIEW_RISE_TOLERANCE):
       self.unwind_preview_hold_timer = 0.0
       return False
     if abs(desired) < abs(self.desired_curvature_last):
@@ -720,6 +734,8 @@ class FordLateralController:
     command_predicted = self._reversal_followthrough_preview(
       desired, command_predicted, current, v_ego, bool(CS.out.steeringPressed), self._lane_change()[0])
     requested, precision = self._blend_and_scale(desired, command_predicted, v_ego, current, allow_opposite_preview)
+    if unwind_selected:
+      requested = self._unwind_request(desired, predicted, command_predicted, requested)
 
     if v_ego > 9.0:
       error_limit = self._curvature_error_limit(
