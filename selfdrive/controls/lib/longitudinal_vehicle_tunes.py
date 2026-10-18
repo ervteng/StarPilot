@@ -113,6 +113,16 @@ KIA_EV9_STOPPED_LEAD_MIN_CLOSING_SPEED = 0.15
 KIA_EV9_STOPPED_LEAD_MAX_DISTANCE = 30.0
 KIA_EV9_STOPPED_LEAD_RAMP_DISTANCE = 8.0
 KIA_EV9_STOPPED_LEAD_MAX_LATERAL_OFFSET = 1.75
+KIA_STINGER_2022_STOPPED_LEAD_OBSTACLE_BIAS_M = 2.0
+KIA_STINGER_2022_STOPPED_LEAD_MAX_DISTANCE = 45.0
+KIA_STINGER_2022_STOPPED_LEAD_RAMP_DISTANCE = 12.0
+KIA_STINGER_2022_STOPPED_LEAD_MAX_EGO_SPEED = 18.0
+KIA_STINGER_2022_STOPPED_LEAD_RAMP_EGO_SPEED = 14.0
+KIA_STINGER_2022_STOPPED_LEAD_MAX_LEAD_SPEED = 6.0
+KIA_STINGER_2022_STOPPED_LEAD_RAMP_LEAD_SPEED = 2.5
+KIA_STINGER_2022_STOPPED_LEAD_MIN_CLOSING_SPEED = -3.0
+KIA_STINGER_2022_STOPPED_LEAD_RAMP_CLOSING_SPEED = -0.5
+KIA_STINGER_2022_STOPPED_LEAD_MAX_LATERAL_OFFSET = 1.75
 HONDA_CRV_5G_LOW_SPEED_STOP_MAX_EGO_SPEED = 4.5
 HONDA_CRV_5G_LOW_SPEED_STOP_MAX_LEAD_SPEED = 0.5
 HONDA_CRV_5G_LOW_SPEED_STOP_MIN_MODEL_PROB = 0.99
@@ -137,6 +147,8 @@ TOYOTA_CAMRY_TSS2_FORCE_STOP_HANDOFF_M = 4.5
 # normal MPC stop-distance margin can be applied. Keep it within the forward
 # offset range exposed by the Force Stop setting.
 TOYOTA_CAMRY_TSS2_FORCE_STOP_DISTANCE_BIAS_M = 6.0
+KIA_STINGER_2022_FORCE_STOP_HANDOFF_M = 4.5
+KIA_STINGER_2022_FORCE_STOP_DISTANCE_BIAS_M = 6.0
 DEFAULT_FORCE_STOP_HANDOFF_M = 6.0
 HYUNDAI_SANTA_FE_2022_FORCE_STOP_REANCHOR_SPEED_TOLERANCE = 0.25
 HYUNDAI_SANTA_FE_2022_FORCE_STOP_LOW_SPEED_HOLD = 2.5
@@ -355,6 +367,48 @@ def get_kia_ev9_stopped_lead_obstacle_bias(CP, lead, v_ego):
   return float(min(bias, max(distance - 0.5, 0.0)))
 
 
+def get_kia_stinger_2022_stopped_lead_obstacle_bias(CP, lead, v_ego):
+  if (
+    getattr(CP, "brand", "") != "hyundai" or
+    str(getattr(CP, "carFingerprint", "")) != "KIA_STINGER_2022" or
+    lead is None or not bool(getattr(lead, "status", False)) or
+    float(v_ego) <= 0.0 or float(v_ego) > KIA_STINGER_2022_STOPPED_LEAD_MAX_EGO_SPEED or
+    abs(float(getattr(lead, "yRel", 0.0))) > KIA_STINGER_2022_STOPPED_LEAD_MAX_LATERAL_OFFSET
+  ):
+    return 0.0
+
+  distance = float(getattr(lead, "dRel", float("inf")))
+  lead_speed = max(float(getattr(lead, "vLead", 0.0)), 0.0)
+  closing_speed = float(v_ego) - lead_speed
+
+  if distance <= 0.0 or distance > KIA_STINGER_2022_STOPPED_LEAD_MAX_DISTANCE:
+    return 0.0
+
+  dist_factor = np.clip(
+    (KIA_STINGER_2022_STOPPED_LEAD_MAX_DISTANCE - distance) /
+    (KIA_STINGER_2022_STOPPED_LEAD_MAX_DISTANCE - KIA_STINGER_2022_STOPPED_LEAD_RAMP_DISTANCE),
+    0.0, 1.0,
+  )
+  lead_v_factor = np.clip(
+    (KIA_STINGER_2022_STOPPED_LEAD_MAX_LEAD_SPEED - lead_speed) /
+    (KIA_STINGER_2022_STOPPED_LEAD_MAX_LEAD_SPEED - KIA_STINGER_2022_STOPPED_LEAD_RAMP_LEAD_SPEED),
+    0.0, 1.0,
+  )
+  ego_v_factor = np.clip(
+    (KIA_STINGER_2022_STOPPED_LEAD_MAX_EGO_SPEED - float(v_ego)) /
+    (KIA_STINGER_2022_STOPPED_LEAD_MAX_EGO_SPEED - KIA_STINGER_2022_STOPPED_LEAD_RAMP_EGO_SPEED),
+    0.0, 1.0,
+  )
+  closing_factor = np.clip(
+    (closing_speed - KIA_STINGER_2022_STOPPED_LEAD_MIN_CLOSING_SPEED) /
+    (KIA_STINGER_2022_STOPPED_LEAD_RAMP_CLOSING_SPEED - KIA_STINGER_2022_STOPPED_LEAD_MIN_CLOSING_SPEED),
+    0.0, 1.0,
+  )
+
+  bias = KIA_STINGER_2022_STOPPED_LEAD_OBSTACLE_BIAS_M * dist_factor * lead_v_factor * ego_v_factor * closing_factor
+  return float(min(bias, max(distance - 0.5, 0.0)))
+
+
 def get_stopped_lead_obstacle_bias(CP, lead, v_ego, mode):
   """Dispatch vehicle-specific stopped-lead spacing tweaks for the active mode."""
   mode_bias = 0.0
@@ -363,7 +417,11 @@ def get_stopped_lead_obstacle_bias(CP, lead, v_ego, mode):
       get_toyota_prius_stopped_lead_obstacle_bias(CP, lead, v_ego),
       get_honda_crv_5g_stopped_lead_obstacle_bias(CP, lead, v_ego),
     )
-  return max(mode_bias, get_kia_ev9_stopped_lead_obstacle_bias(CP, lead, v_ego))
+  return max(
+    mode_bias,
+    get_kia_ev9_stopped_lead_obstacle_bias(CP, lead, v_ego),
+    get_kia_stinger_2022_stopped_lead_obstacle_bias(CP, lead, v_ego),
+  )
 
 
 def get_honda_crv_5g_low_speed_stopped_lead_cap(CP, lead, v_ego, accel_min):
@@ -856,14 +914,14 @@ def get_toyota_sienna_post_departure_restop_cap(CP, lead, v_ego, accel_min,
 
 def get_force_stop_handoff_distance(car_fingerprint):
   """Return the distance at which force-stop control hands off to MPC."""
-  if str(car_fingerprint) == "TOYOTA_CAMRY_TSS2":
-    return TOYOTA_CAMRY_TSS2_FORCE_STOP_HANDOFF_M
+  if str(car_fingerprint) in ("TOYOTA_CAMRY_TSS2", "KIA_STINGER_2022"):
+    return 4.5
   return DEFAULT_FORCE_STOP_HANDOFF_M
 
 
 def get_force_stop_distance_bias(car_fingerprint):
-  if str(car_fingerprint) == "TOYOTA_CAMRY_TSS2":
-    return TOYOTA_CAMRY_TSS2_FORCE_STOP_DISTANCE_BIAS_M
+  if str(car_fingerprint) in ("TOYOTA_CAMRY_TSS2", "KIA_STINGER_2022"):
+    return 6.0
   return 0.0
 
 
