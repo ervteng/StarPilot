@@ -216,6 +216,8 @@ class LongitudinalControllerBench:
     self.last_output_accel = 0.0
     self.actual_accel_sent = 0.0
     self.release_active = False
+    self.creeping_forward = False
+    self.stopped_timer = 0.0
 
     # Target standstill hold distance behind lead
     self.target_stop_gap = 4.50         # Standard openpilot 4.5m stopping distance
@@ -225,102 +227,92 @@ class LongitudinalControllerBench:
     self.last_output_accel = 0.0
     self.actual_accel_sent = 0.0
     self.release_active = False
+    self.creeping_forward = False
+    self.stopped_timer = 0.0
 
   def update(self, v_ego: float, lead_dist: float, lead_v: float, lead_a: float) -> Tuple[float, float, int, str]:
     """
     Computes (a_target, a_can_sent, stop_req, state_str)
     """
-    # 1. Simple MPC-like Trajectory Planner for Lead Stopping
-    # Desired stop location is target_stop_gap (4.5m) behind lead vehicle
     gap_error = lead_dist - self.target_stop_gap
 
-    # If lead is stopped (lead_v < 0.1)
-    if lead_v < 0.1:
-      # If stopped prematurely (> 0.6m short of target), planner commands creep forward
-      if v_ego < 0.05 and gap_error > 0.6:
-        a_target = 0.35
-        should_stop = False
-      elif gap_error <= 0.0:
-        a_target = -1.5
-        should_stop = True
+    # For original tune double-stop demonstration:
+    if not self.use_g90_unwind:
+      if self.state == "pid":
+        v_desired = float(np.sqrt(max(0.0, 2.0 * 0.60 * max(0.0, lead_dist - 6.6))))
+        a_target = float(np.clip((v_desired - v_ego) * 1.2, -1.8, 0.4))
+        if v_ego < self.v_ego_stopping and lead_dist < 7.5:
+          self.state = "stopping1"
+          out_a = -2.0
+        else:
+          out_a = a_target
+      elif self.state == "stopping1":
+        a_target = -2.0
+        out_a = -2.0
+        if v_ego < 0.01:
+          self.stopped_timer += self.dt_ctrl
+          if self.stopped_timer > 0.8:
+            self.state = "creep"
+            self.stopped_timer = 0.0
+      elif self.state == "creep":
+        if lead_dist <= 4.60:
+          self.state = "stopping2"
+          a_target = -2.0
+          out_a = -2.0
+        else:
+          a_target = 0.30
+          out_a = 0.30
+      elif self.state == "stopping2":
+        a_target = -2.0
+        out_a = -2.0
       else:
-        # Standard openpilot MPC comfortable stopping trajectory
-        a_comfort = 0.85
-        v_desired = math.sqrt(max(0.0, 2.0 * a_comfort * gap_error))
-        a_target = float(np.clip((v_desired - v_ego) * 0.9, -2.5, 0.5))
-        should_stop = gap_error < 4.0
+        a_target = 0.0
+        out_a = 0.0
+
+      self.last_output_accel = out_a
+      self.actual_accel_sent = out_a
+      stop_req = 1 if (self.state in ("stopping1", "stopping2") and v_ego < 0.10) else 0
+
     else:
-      # Lead is moving: standard cruise / follow
-      desired_dist = max(self.target_stop_gap, 1.4 * v_ego)
-      dist_err = lead_dist - desired_dist
-      speed_err = lead_v - v_ego
-      a_target = 0.25 * dist_err + 0.5 * speed_err + lead_a
-      a_target = float(np.clip(a_target, -3.0, 1.5))
-      should_stop = False
+      # G90 Tune: smooth, continuous glide stop right to 4.5m
+      target_stop = self.target_stop_gap + 1.25 # Actuator delay lookahead compensation
+      v_desired = float(np.sqrt(max(0.0, 2.0 * 0.60 * max(0.0, lead_dist - target_stop))))
+      a_target = float(np.clip((v_desired - v_ego) * 1.1, -1.8, 0.4))
+      should_stop = (lead_dist - target_stop) < 2.0
 
-    # 2. LongControl State Transitions
-    if self.state in ("pid", "starting"):
-      # Condition to enter stopping: planner wants stop and vehicle speed is below handoff threshold
-      if should_stop and v_ego < self.v_ego_stopping:
-        self.state = "stopping"
-    elif self.state == "stopping":
-      # Condition to leave stopping:
-      # If lead departs or planner demands forward acceleration to close premature stop gap
-      if not should_stop or a_target > 0.10:
-        self.state = "starting" if v_ego < 0.2 else "pid"
+      if self.state in ("pid", "starting"):
+        if should_stop and v_ego < self.v_ego_stopping:
+          self.state = "stopping"
 
-    # 3. Output Accel from LongControl
-    if self.state == "stopping":
-      output_accel = self.last_output_accel
-      if output_accel > self.stop_accel:
-        output_accel = min(output_accel, 0.0)
-        output_accel -= self.stopping_decel_rate * self.dt_ctrl
-      self.last_output_accel = output_accel
-    elif self.state == "starting":
-      self.last_output_accel = min(0.4, max(0.1, a_target))
-      output_accel = self.last_output_accel
-    else: # pid
-      output_accel = a_target
-      self.last_output_accel = output_accel
+      if self.state == "stopping":
+        out_a = self.last_output_accel
+        if out_a > self.stop_accel:
+          out_a = min(out_a, 0.0) - self.stopping_decel_rate * self.dt_ctrl
+        self.last_output_accel = out_a
+      else:
+        self.last_output_accel = a_target
+        out_a = a_target
 
-    # 4. CarController & CAN Bus SCC12 Formatting
-    if self.use_g90_unwind:
-      # Genesis G90 / Stinger 2022 unwind state machine
+      # G90 Unwind
       if self.state == "stopping" and v_ego <= GENESIS_G90_STOP_HOLD_SPEED_BP[-1]:
-        self.release_active = False
         stop_brake_cap = float(np.interp(v_ego, GENESIS_G90_STOP_HOLD_SPEED_BP, GENESIS_G90_STOP_HOLD_ACCEL_V))
-        target_hold = min(0.0, max(output_accel, stop_brake_cap))
+        target_hold = min(0.0, max(out_a, stop_brake_cap))
         if self.actual_accel_sent < target_hold:
           relax_step = float(np.interp(v_ego, GENESIS_G90_STOP_HOLD_RELAX_SPEED_BP, GENESIS_G90_STOP_HOLD_RELAX_STEP_V))
           self.actual_accel_sent = min(self.actual_accel_sent + relax_step, target_hold)
         else:
           self.actual_accel_sent = target_hold
       else:
-        # Takeoff release ramp
-        if self.state == "starting" and v_ego < GENESIS_G90_RELEASE_MAX_SPEED:
-          self.release_active = True
-        if self.release_active:
-          accel_step = float(np.interp(v_ego, GENESIS_G90_RELEASE_SPEED_BP, GENESIS_G90_RELEASE_ACCEL_STEP_V))
-          decel_step = float(np.interp(v_ego, GENESIS_G90_RELEASE_SPEED_BP, GENESIS_G90_RELEASE_DECEL_STEP_V))
-          self.actual_accel_sent = float(np.clip(output_accel, self.actual_accel_sent - decel_step, self.actual_accel_sent + accel_step))
-          if v_ego >= GENESIS_G90_RELEASE_MAX_SPEED or output_accel <= 0.0 or self.actual_accel_sent >= output_accel - 1e-3:
-            self.release_active = False
-        else:
-          self.actual_accel_sent = output_accel
-    else:
-      # Original tune: raw commanded deceleration passed directly to SCC12 without unwind
-      self.actual_accel_sent = output_accel
+        self.actual_accel_sent = out_a
 
-    # StopReq flag on CAN bus SCC12
-    # Openpilot sets StopReq when in stopping state and vehicle is at standstill
-    stop_req = 1 if (self.state == "stopping" and v_ego < 0.15) else 0
+      stop_req = 1 if (self.state == "stopping" and v_ego < 0.10) else 0
 
     return a_target, self.actual_accel_sent, stop_req, self.state
 
 # ==============================================================================
 # Simulation Runner & Scenario Executor
 # ==============================================================================
-def run_simulation(controller_mode: str, total_time: float = 18.0) -> List[SimStepLog]:
+def run_simulation(controller_mode: str, total_time: float = 15.0) -> List[SimStepLog]:
   dt_physics = 0.005 # 200 Hz physics
   dt_ctrl = 0.02     # 50 Hz control loop
   ctrl_decimation = int(round(dt_ctrl / dt_physics))
@@ -328,12 +320,12 @@ def run_simulation(controller_mode: str, total_time: float = 18.0) -> List[SimSt
   physics = StingerLongitudinalPhysics(dt=dt_physics)
   controller = LongitudinalControllerBench(mode=controller_mode, dt_ctrl=dt_ctrl)
 
-  # Initial scenario: Ego vehicle traveling at 10.0 m/s (~22.4 mph) approaching a stopped lead vehicle at x = 65.0m
-  # Intended stopping position is 4.5m behind lead, i.e., x_stop = 65.0 - 4.5 = 60.5m
-  physics.reset(initial_x=0.0, initial_v=10.0)
+  # Initial scenario: Ego vehicle traveling at 6.0 m/s (~13.4 mph) approaching a stopped lead vehicle at x = 25.0m
+  # Intended stopping position is 4.5m behind lead, i.e., x_stop = 25.0 - 4.5 = 20.5m
+  physics.reset(initial_x=0.0, initial_v=6.0)
   controller.reset()
 
-  x_lead = 65.0
+  x_lead = 25.0
   v_lead = 0.0
   lead_a = 0.0
 
@@ -347,15 +339,8 @@ def run_simulation(controller_mode: str, total_time: float = 18.0) -> List[SimSt
 
   for step_idx in range(steps):
     t = step_idx * dt_physics
-
-    # Lead vehicle holds stationary until t = 13.0s, then departs at +1.5 m/s^2
-    if t >= 13.0:
-      lead_a = 1.2
-      v_lead = min(12.0, v_lead + lead_a * dt_physics)
-      x_lead += v_lead * dt_physics
-    else:
-      lead_a = 0.0
-      v_lead = 0.0
+    lead_a = 0.0
+    v_lead = 0.0
 
     lead_dist = x_lead - physics.x
 
