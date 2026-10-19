@@ -599,6 +599,27 @@ class TestHyundaiFingerprint:
     assert len(radar_data.points) == 16
     assert radar_data.points[0].dRel == pytest.approx(25.0)
 
+    other_config = get_radar_track_config(CAR.HYUNDAI_IONIQ_5)
+    assert other_config.radar_type == "mrr30"
+    assert other_config.dbc_name is None
+
+    for candidate in HYUNDAI_NON_SCC_CARS:
+      CP = CarInterface.get_params(candidate, gen_empty_fingerprint(), [], True, False, False, None)
+      assert bool(CP.flags & HyundaiFlags.NON_SCC)
+      assert not CP.alphaLongitudinalAvailable
+      assert CP.pcmCruise
+
+    CP = CarInterface.get_params(CAR.KIA_SPORTAGE_HEV_2026, gen_empty_fingerprint(), [], False, False, False, None)
+    assert CP.steerControlType == CarParams.SteerControlType.angle
+    assert CP.safetyConfigs[-1].safetyParam & HyundaiSafetyFlags.CANFD_ANGLE_STEERING
+    assert not (CP.safetyConfigs[-1].safetyParam & HyundaiSafetyFlags.CCNC)
+
+    fingerprint = gen_empty_fingerprint()
+    cam_can = CanBus(None, fingerprint).CAM
+    fingerprint[cam_can][0xCB] = 24
+    CP = CarInterface.get_params(CAR.KIA_SPORTAGE_HEV_2026, fingerprint, [], False, False, False, None)
+    assert CP.flags & HyundaiFlags.SEND_LFA
+
   def test_kia_stinger_radar(self):
     # Older pre-2022 Stinger must NOT have radar track config
     assert get_radar_track_config(CAR.KIA_STINGER) is None
@@ -663,27 +684,6 @@ class TestHyundaiFingerprint:
     radar_data2 = radar.update([(1_050_000_000, [(0x255, bytes(8), 1)])])
     assert radar_data2 is not None
     assert len(radar_data2.points) == 0
-
-    other_config = get_radar_track_config(CAR.HYUNDAI_IONIQ_5)
-    assert other_config.radar_type == "mrr30"
-    assert other_config.dbc_name is None
-
-    for candidate in HYUNDAI_NON_SCC_CARS:
-      CP = CarInterface.get_params(candidate, gen_empty_fingerprint(), [], True, False, False, None)
-      assert bool(CP.flags & HyundaiFlags.NON_SCC)
-      assert not CP.alphaLongitudinalAvailable
-      assert CP.pcmCruise
-
-    CP = CarInterface.get_params(CAR.KIA_SPORTAGE_HEV_2026, gen_empty_fingerprint(), [], False, False, False, None)
-    assert CP.steerControlType == CarParams.SteerControlType.angle
-    assert CP.safetyConfigs[-1].safetyParam & HyundaiSafetyFlags.CANFD_ANGLE_STEERING
-    assert not (CP.safetyConfigs[-1].safetyParam & HyundaiSafetyFlags.CCNC)
-
-    fingerprint = gen_empty_fingerprint()
-    cam_can = CanBus(None, fingerprint).CAM
-    fingerprint[cam_can][0xCB] = 24
-    CP = CarInterface.get_params(CAR.KIA_SPORTAGE_HEV_2026, fingerprint, [], False, False, False, None)
-    assert CP.flags & HyundaiFlags.SEND_LFA
 
   @pytest.mark.parametrize("candidate", list(CAR))
   def test_no_stock_lka_safety_flag_is_sportage_only(self, candidate):
