@@ -204,13 +204,11 @@ def test_elantra_gets_lead_veto_margin_before_force_stop():
 
 def test_camry_tss2_uses_closer_force_stop_handoff():
   assert get_force_stop_handoff_distance("TOYOTA_CAMRY_TSS2") == pytest.approx(4.5)
-  assert get_force_stop_handoff_distance("KIA_STINGER_2022") == pytest.approx(4.5)
   assert get_force_stop_handoff_distance("TOYOTA_RAV4_TSS2") == pytest.approx(6.0)
 
 
 def test_camry_tss2_gets_forward_force_stop_bias_only():
   assert get_force_stop_distance_bias("TOYOTA_CAMRY_TSS2") == pytest.approx(6.0)
-  assert get_force_stop_distance_bias("KIA_STINGER_2022") == pytest.approx(6.0)
   assert get_force_stop_distance_bias("TOYOTA_RAV4_TSS2") == pytest.approx(0.0)
 
 

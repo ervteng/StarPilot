@@ -738,7 +738,7 @@ class CarController(CarControllerBase):
         self._ioniq_6_long_tuning.stopping = stopping
         self._ioniq_6_long_tuning.long_control_state_last = actuators.longControlState
 
-    if self.CP.carFingerprint == CAR.GENESIS_G90 and self.long_active_ecu:
+    if self.CP.carFingerprint in (CAR.GENESIS_G90, CAR.KIA_STINGER_2022) and self.long_active_ecu:
       self._genesis_g90_long_tuning = update_genesis_g90_longitudinal_tuning(self._genesis_g90_long_tuning, accel_cmd,
                                                                               CS.out.vEgo, actuators.longControlState,
                                                                               self.long_active_ecu)

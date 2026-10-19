@@ -210,17 +210,6 @@ def test_kia_ev9_stopped_lead_buffer_is_low_speed_and_vehicle_specific():
   ) == pytest.approx(0.0)
 
 
-def test_kia_stinger_2022_has_clean_zero_stopped_lead_bias():
-  stinger = HyundaiCarInterface.get_non_essential_params(HYUNDAI_CAR.KIA_STINGER_2022)
-  other = HyundaiCarInterface.get_non_essential_params(HYUNDAI_CAR.KIA_EV6)
-  stopped_lead = make_lead(status=True, d_rel=8.0, v_lead=0.0, radar=True, model_prob=0.99)
-
-  # Stinger uses clean zero bias to eliminate two-stage stop discontinuities
-  assert get_stopped_lead_obstacle_bias(stinger, stopped_lead, v_ego=3.0, mode="blended") == pytest.approx(0.0)
-  assert get_stopped_lead_obstacle_bias(stinger, stopped_lead, v_ego=3.0, mode="acc") == pytest.approx(0.0)
-  assert get_stopped_lead_obstacle_bias(other, stopped_lead, v_ego=3.0, mode="blended") == pytest.approx(0.0)
-
-
 def test_honda_crv_5g_early_radar_follow_admits_high_closing_centered_lead():
   crv = CarInterface.get_non_essential_params(CAR.HONDA_CRV_5G)
   lead = make_lead(

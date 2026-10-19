@@ -325,7 +325,7 @@ class CarInterface(CarInterfaceBase):
 
     # Car specific configuration overrides
 
-    if candidate == CAR.GENESIS_G90:
+    if candidate in (CAR.GENESIS_G90, CAR.KIA_STINGER_2022):
       ret.stoppingDecelRate = 0.55
       ret.vEgoStopping = 0.8
 

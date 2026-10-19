@@ -30,15 +30,6 @@ V_EGO_STATIONARY = 4.   # no stationary object flag below this speed
 
 RADAR_TO_CENTER = 2.7   # (deprecated) RADAR is ~ 2.7m ahead from center of car
 RADAR_TO_CAMERA = 1.52  # RADAR is ~ 1.5m ahead from center of mesh frame
-KIA_STINGER_RADAR_TO_CAMERA = 2.15  # Front bumper radar is ~2.15m ahead from center of mesh frame on Stinger/G70
-
-
-def get_radar_to_camera_offset(CP) -> float:
-  fingerprint = str(getattr(CP, "carFingerprint", ""))
-  if fingerprint in ("KIA_STINGER", "KIA_STINGER_2022", "GENESIS_G70"):
-    return KIA_STINGER_RADAR_TO_CAMERA
-  return RADAR_TO_CAMERA
-
 G90_RADAR_LOW_SPEED_MAX_DIST = 12.0
 G90_RADAR_LOW_SPEED_MAX_Y = 0.6
 HONDA_BOSCH_A_RADAR_TS = 1.0 / BOSCH_A_FREQ_HZ
@@ -233,9 +224,8 @@ def laplacian_pdf(x: float, mu: float, b: float):
   return math.exp(-abs(x-mu)/b)
 
 
-def vision_track_probability(track: Track, lead: capnp._DynamicStructReader, v_ego: float,
-                             radar_to_camera: float = RADAR_TO_CAMERA) -> float:
-  offset_vision_dist = lead.x[0] - radar_to_camera
+def vision_track_probability(track: Track, lead: capnp._DynamicStructReader, v_ego: float) -> float:
+  offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
   prob_d = laplacian_pdf(track.dRel, offset_vision_dist, lead.xStd[0])
   prob_y = laplacian_pdf(track.yRel, -lead.y[0], lead.yStd[0])
   prob_v = laplacian_pdf(track.vRel + v_ego, lead.v[0], lead.vStd[0])
@@ -269,9 +259,8 @@ def post_standstill_radar_lead_is_urgent(lead: dict[str, Any]) -> bool:
 
 def track_matches_vision(track: Track, lead: capnp._DynamicStructReader, v_ego: float, *,
                          dist_scale: float, dist_floor: float, vel_limit: float,
-                         y_std_scale: float, y_floor: float,
-                         radar_to_camera: float = RADAR_TO_CAMERA) -> bool:
-  offset_vision_dist = lead.x[0] - radar_to_camera
+                         y_std_scale: float, y_floor: float) -> bool:
+  offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
   dist_sane = abs(track.dRel - offset_vision_dist) < max(abs(offset_vision_dist) * dist_scale, dist_floor)
   vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < vel_limit) or (v_ego + track.vRel > 3)
   lat_sane = abs(track.yRel + lead.y[0]) < max(y_floor, y_std_scale * max(float(lead.yStd[0]), 0.2))
@@ -280,7 +269,7 @@ def track_matches_vision(track: Track, lead: capnp._DynamicStructReader, v_ego: 
 
 def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_data: capnp._DynamicStructReader, tracks: dict[int, Track],
                           starpilot_toggles: SimpleNamespace, g90_radar_filter: bool = False,
-                          preferred_track_id: int = -1, radar_to_camera: float = RADAR_TO_CAMERA):
+                          preferred_track_id: int = -1):
   if model_data.meta.laneChangeState == LaneChangeState.laneChangeStarting and getattr(starpilot_toggles, "human_lane_changes", False):
     direction = model_data.meta.laneChangeDirection
     if direction == LaneChangeDirection.left:
@@ -294,14 +283,13 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_
   if not tracks:
     return None
 
-  track = max(tracks.values(), key=lambda candidate: vision_track_probability(candidate, lead, v_ego, radar_to_camera=radar_to_camera))
+  track = max(tracks.values(), key=lambda candidate: vision_track_probability(candidate, lead, v_ego))
 
   # if no 'sane' match is found return -1
   # stationary radar points can be false positives
   if track_matches_vision(track, lead, v_ego,
                           dist_scale=0.25, dist_floor=5.0,
-                          vel_limit=10.0, y_std_scale=1.0, y_floor=1.0,
-                          radar_to_camera=radar_to_camera):
+                          vel_limit=10.0, y_std_scale=1.0, y_floor=1.0):
     return track
 
   # Some vehicles intermittently drop a good radar match on large leads (semis are
@@ -312,19 +300,17 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_
   if preferred_track is not None and preferred_track.cnt >= 3:
     if track_matches_vision(preferred_track, lead, v_ego,
                             dist_scale=0.40, dist_floor=8.0,
-                            vel_limit=13.0, y_std_scale=2.0, y_floor=1.5,
-                            radar_to_camera=radar_to_camera):
+                            vel_limit=13.0, y_std_scale=2.0, y_floor=1.5):
       return preferred_track
   return None
 
 
-def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: float, model_v_ego: float, model_prob: float,
-                               radar_to_camera: float = RADAR_TO_CAMERA):
+def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: float, model_v_ego: float, model_prob: float):
   prev_aLeadK = getattr(get_RadarState_from_vision, "prev_aLeadK", 0.0)
   blended_aLeadK = 0.8 * float(lead_msg.a[0]) + 0.2 * prev_aLeadK
   get_RadarState_from_vision.prev_aLeadK = blended_aLeadK
   return {
-    "dRel": float(lead_msg.x[0] - radar_to_camera),
+    "dRel": float(lead_msg.x[0] - RADAR_TO_CAMERA),
     "yRel": float(-lead_msg.y[0]),
     "vRel": float(lead_msg.v[0] - model_v_ego),
     "vLead": float(v_ego + (lead_msg.v[0] - model_v_ego)),
@@ -343,15 +329,14 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
              model_v_ego: float, model_data: capnp._DynamicStructReader, standstill: bool,
              starpilot_plan: capnp._DynamicStructReader, starpilot_toggles: SimpleNamespace,
              low_speed_override: bool = True, g90_radar_filter: bool = False, lead_prob: float | None = None,
-             preferred_track_id: int = -1, honda_bosch_a_radar: bool = False,
-             radar_to_camera: float = RADAR_TO_CAMERA) -> dict[str, Any]:
+             preferred_track_id: int = -1, honda_bosch_a_radar: bool = False) -> dict[str, Any]:
   lead_detection_probability = float(getattr(starpilot_toggles, "lead_detection_probability", 0.35))
   filtered_lead_prob = float(lead_msg.prob if lead_prob is None else lead_prob)
 
   # Determine leads, this is where the essential logic happens
   if len(tracks) > 0 and ready and filtered_lead_prob > lead_detection_probability:
     track = match_vision_to_track(v_ego, lead_msg, model_data, tracks, starpilot_toggles, g90_radar_filter,
-                                  preferred_track_id=preferred_track_id, radar_to_camera=radar_to_camera)
+                                  preferred_track_id=preferred_track_id)
   else:
     track = None
 
@@ -359,7 +344,7 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
   if track is not None:
     lead_dict = track.get_RadarState(filtered_lead_prob)
   elif (track is None) and ready and (filtered_lead_prob > lead_detection_probability):
-    lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego, filtered_lead_prob, radar_to_camera=radar_to_camera)
+    lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego, filtered_lead_prob)
 
   if low_speed_override:
     if g90_radar_filter:
@@ -380,8 +365,7 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
         preferred_matches_model = (not model_lead_available or
                                    track_matches_vision(preferred_track, lead_msg, v_ego,
                                                         dist_scale=0.25, dist_floor=5.0,
-                                                        vel_limit=10.0, y_std_scale=1.0, y_floor=1.0,
-                                                        radar_to_camera=radar_to_camera))
+                                                        vel_limit=10.0, y_std_scale=1.0, y_floor=1.0))
         preferred_is_current = (not lead_dict.get('status', False) or
                                 lead_dict.get('radarTrackId', -1) == preferred_track_id or
                                 (lead_dict.get('status', False) and not lead_dict.get('radar', False)))
@@ -404,8 +388,7 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
       return (model_lead_available and
               track_matches_vision(candidate, lead_msg, v_ego,
                                    dist_scale=0.25, dist_floor=5.0,
-                                   vel_limit=10.0, y_std_scale=1.0, y_floor=1.0,
-                                   radar_to_camera=radar_to_camera))
+                                   vel_limit=10.0, y_std_scale=1.0, y_floor=1.0))
 
     low_speed_tracks = [c for c in low_speed_tracks if candidate_is_established(c)]
     if len(low_speed_tracks) > 0:
@@ -466,12 +449,11 @@ def get_adjacent_stopped(tracks: dict[int, Track], model_data: capnp._DynamicStr
 
 class RadarD:
   def __init__(self, radar_ts: float = DT_MDL, delay: float = 0.0, g90_radar_filter: bool = False,
-               honda_bosch_a_radar: bool = False, radar_to_camera: float = RADAR_TO_CAMERA):
+               honda_bosch_a_radar: bool = False):
     self.current_time = 0.0
 
     self.tracks: dict[int, Track] = {}
     self.honda_bosch_a_radar = honda_bosch_a_radar
-    self.radar_to_camera = radar_to_camera
     # The lead KF consumes Bosch measurements at the physical radar cadence. Lead probability
     # filters, however, consume modelV2 leads every model cycle and must retain model-loop timing.
     kf_dt = HONDA_BOSCH_A_RADAR_TS if self.honda_bosch_a_radar else radar_ts
@@ -524,12 +506,10 @@ class RadarD:
 
     strict_match = track_matches_vision(preferred_track, lead, self.v_ego,
                                         dist_scale=0.25, dist_floor=5.0,
-                                        vel_limit=10.0, y_std_scale=1.0, y_floor=1.0,
-                                        radar_to_camera=self.radar_to_camera)
+                                        vel_limit=10.0, y_std_scale=1.0, y_floor=1.0)
     relaxed_match = track_matches_vision(preferred_track, lead, self.v_ego,
                                          dist_scale=0.40, dist_floor=8.0,
-                                         vel_limit=13.0, y_std_scale=2.0, y_floor=1.5,
-                                         radar_to_camera=self.radar_to_camera)
+                                         vel_limit=13.0, y_std_scale=2.0, y_floor=1.5)
 
     # Arm A: a preferred track that no longer passes continuity may be stale when another live
     # track has a better association score. Clearing preference never selects that challenger;
@@ -537,9 +517,9 @@ class RadarD:
     if relaxed_match:
       self.preferred_challenger_stale_counts[lead_index] = 0
     else:
-      best_track = max(self.tracks.values(), key=lambda candidate: vision_track_probability(candidate, lead, self.v_ego, radar_to_camera=self.radar_to_camera))
-      preferred_score = vision_track_probability(preferred_track, lead, self.v_ego, radar_to_camera=self.radar_to_camera)
-      best_score = vision_track_probability(best_track, lead, self.v_ego, radar_to_camera=self.radar_to_camera)
+      best_track = max(self.tracks.values(), key=lambda candidate: vision_track_probability(candidate, lead, self.v_ego))
+      preferred_score = vision_track_probability(preferred_track, lead, self.v_ego)
+      best_score = vision_track_probability(best_track, lead, self.v_ego)
       if best_track.identifier != preferred_id and best_score > preferred_score:
         self.preferred_challenger_stale_counts[lead_index] += 1
       else:
@@ -547,7 +527,7 @@ class RadarD:
 
     # Arm B: gross absolute range disagreement is independent evidence of staleness, but a strict
     # match is authoritative and resets the streak even when model uncertainty permits >25 m error.
-    distance_mismatch = abs(preferred_track.dRel - (lead.x[0] - self.radar_to_camera))
+    distance_mismatch = abs(preferred_track.dRel - (lead.x[0] - RADAR_TO_CAMERA))
     if strict_match:
       self.preferred_gross_distance_stale_counts[lead_index] = 0
     elif distance_mismatch > HONDA_BOSCH_A_GROSS_DISTANCE_M:
@@ -673,15 +653,13 @@ class RadarD:
                           standstill, sm['starpilotPlan'], self.starpilot_toggles, low_speed_override=True,
                           g90_radar_filter=self.g90_radar_filter, lead_prob=self.lead_prob_filters[0].x,
                           preferred_track_id=self.prev_lead_track_ids[0],
-                          honda_bosch_a_radar=self.honda_bosch_a_radar,
-                          radar_to_camera=self.radar_to_camera)
+                          honda_bosch_a_radar=self.honda_bosch_a_radar)
       self.radar_state.leadOne = self._filter_post_standstill_lead(lead_one)
       self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, sm['modelV2'],
                                           sm['carState'].standstill, sm['starpilotPlan'], self.starpilot_toggles, low_speed_override=False,
                                           g90_radar_filter=self.g90_radar_filter, lead_prob=self.lead_prob_filters[1].x,
                                           preferred_track_id=self.prev_lead_track_ids[1],
-                                          honda_bosch_a_radar=self.honda_bosch_a_radar,
-                                          radar_to_camera=self.radar_to_camera)
+                                          honda_bosch_a_radar=self.honda_bosch_a_radar)
 
       for i, lead in enumerate((self.radar_state.leadOne, self.radar_state.leadTwo)):
         if lead.status and getattr(lead, "radar", False):
@@ -742,9 +720,8 @@ def main() -> None:
 
   g90_radar_filter = CP.brand == "hyundai" and CP.carFingerprint == "GENESIS_G90"
   honda_bosch_a_radar = is_bosch_a_radar_car(CP)
-  radar_to_camera = get_radar_to_camera_offset(CP)
   RD = RadarD(radar_ts=radar_ts, delay=CP.radarDelay, g90_radar_filter=g90_radar_filter,
-              honda_bosch_a_radar=honda_bosch_a_radar, radar_to_camera=radar_to_camera)
+              honda_bosch_a_radar=honda_bosch_a_radar)
 
   sm = sm.extend(['starpilotPlan'])
   pm = pm.extend(['starpilotRadarState'])

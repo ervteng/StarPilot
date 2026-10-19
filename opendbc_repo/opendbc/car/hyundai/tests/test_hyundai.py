@@ -2000,10 +2000,10 @@ class TestHyundaiFingerprint:
 
   def test_genesis_g90_longitudinal_params_bias_toward_earlier_stop_handoff(self):
     toggles = get_test_toggles()
-    CP = CarInterface.get_params(CAR.GENESIS_G90, gen_empty_fingerprint(), [], True, False, False, toggles)
-
-    assert CP.vEgoStopping == pytest.approx(0.8)
-    assert CP.stoppingDecelRate == pytest.approx(0.55)
+    for candidate in (CAR.GENESIS_G90, CAR.KIA_STINGER_2022):
+      CP = CarInterface.get_params(candidate, gen_empty_fingerprint(), [], True, False, False, toggles)
+      assert CP.vEgoStopping == pytest.approx(0.8)
+      assert CP.stoppingDecelRate == pytest.approx(0.55)
 
   def test_palisade_2023_longitudinal_params_soften_final_stop_hold(self):
     toggles = get_test_toggles()

@@ -137,8 +137,6 @@ TOYOTA_CAMRY_TSS2_FORCE_STOP_HANDOFF_M = 4.5
 # normal MPC stop-distance margin can be applied. Keep it within the forward
 # offset range exposed by the Force Stop setting.
 TOYOTA_CAMRY_TSS2_FORCE_STOP_DISTANCE_BIAS_M = 6.0
-KIA_STINGER_2022_FORCE_STOP_HANDOFF_M = 4.5
-KIA_STINGER_2022_FORCE_STOP_DISTANCE_BIAS_M = 6.0
 DEFAULT_FORCE_STOP_HANDOFF_M = 6.0
 HYUNDAI_SANTA_FE_2022_FORCE_STOP_REANCHOR_SPEED_TOLERANCE = 0.25
 HYUNDAI_SANTA_FE_2022_FORCE_STOP_LOW_SPEED_HOLD = 2.5
@@ -365,10 +363,7 @@ def get_stopped_lead_obstacle_bias(CP, lead, v_ego, mode):
       get_toyota_prius_stopped_lead_obstacle_bias(CP, lead, v_ego),
       get_honda_crv_5g_stopped_lead_obstacle_bias(CP, lead, v_ego),
     )
-  return max(
-    mode_bias,
-    get_kia_ev9_stopped_lead_obstacle_bias(CP, lead, v_ego),
-  )
+  return max(mode_bias, get_kia_ev9_stopped_lead_obstacle_bias(CP, lead, v_ego))
 
 
 def get_honda_crv_5g_low_speed_stopped_lead_cap(CP, lead, v_ego, accel_min):
@@ -861,14 +856,14 @@ def get_toyota_sienna_post_departure_restop_cap(CP, lead, v_ego, accel_min,
 
 def get_force_stop_handoff_distance(car_fingerprint):
   """Return the distance at which force-stop control hands off to MPC."""
-  if str(car_fingerprint) in ("TOYOTA_CAMRY_TSS2", "KIA_STINGER_2022"):
-    return 4.5
+  if str(car_fingerprint) == "TOYOTA_CAMRY_TSS2":
+    return TOYOTA_CAMRY_TSS2_FORCE_STOP_HANDOFF_M
   return DEFAULT_FORCE_STOP_HANDOFF_M
 
 
 def get_force_stop_distance_bias(car_fingerprint):
-  if str(car_fingerprint) in ("TOYOTA_CAMRY_TSS2", "KIA_STINGER_2022"):
-    return 6.0
+  if str(car_fingerprint) == "TOYOTA_CAMRY_TSS2":
+    return TOYOTA_CAMRY_TSS2_FORCE_STOP_DISTANCE_BIAS_M
   return 0.0
 
 
