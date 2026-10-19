@@ -291,7 +291,7 @@ class CarState(CarStateBase):
     if self.CP.carFingerprint == CAR.KIA_RAY_EV:
       self.lda_button = int(cp.vl["BCM_PO_11"]["RAY_LKAS_BTN"] != 0) \
         if cp.ts_nanos["BCM_PO_11"]["RAY_LKAS_BTN"] > 0 else 0
-    elif self.CP.carFingerprint == CAR.HYUNDAI_SONATA:
+    elif self.CP.carFingerprint in (CAR.HYUNDAI_SONATA, CAR.KIA_STINGER_2022):
       self.lda_button = int(cp.vl["BCM_PO_11"]["LDA_BTN"]) if cp.ts_nanos["BCM_PO_11"]["LDA_BTN"] > 0 else 0
     elif self.CP.carFingerprint == CAR.HYUNDAI_SONATA_HYBRID:
       self.lda_button = self.get_sonata_hybrid_lkas_button_state(cp)

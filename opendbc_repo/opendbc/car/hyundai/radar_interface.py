@@ -5,6 +5,7 @@ from opendbc.can import CANParser
 from opendbc.can.dbc import DBC as DBCReader
 from opendbc.can.parser import get_raw_value
 from opendbc.car import Bus, structs
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import RadarInterfaceBase
 from opendbc.car.hyundai.values import CAR, DBC, HyundaiFlags, HYUNDAI_MANDO_FRONT_RADAR_DBC, HYUNDAI_MRREVO14F_RADAR_DBC, \
                                        HYUNDAI_MRR30_RADAR_DBC, HYUNDAI_MRR35_RADAR_DBC
@@ -22,6 +23,78 @@ MRR35_RADAR_MSG_COUNT = 32
 GV70_RADAR_START_ADDR = 0x210
 GV70_RADAR_MSG_COUNT = 16
 GV70_RADAR_DBC = "hyundai_radar_210_21f_generated"
+
+STINGER_2022_RADAR_BUS = 1
+STINGER_2022_RADAR_START_ADDR = 0x238
+STINGER_2022_RADAR_SLOT_COUNT = 10
+STINGER_2022_RADAR_MSG_COUNT = 30
+STINGER_2022_MAX_TRIPLET_SPAN_NS = 20_000_000
+
+
+def _field(dat: bytes, start: int, size: int) -> int:
+  return (int.from_bytes(dat, "big") >> (64 - start - size)) & ((1 << size) - 1)
+
+
+@dataclass(frozen=True)
+class Stinger2022CandidateObject:
+  slot: int
+  object_id: int
+  cycle: int
+  type_raw: int
+  distance: float
+  lateral_raw: float
+  absolute_speed: float
+
+  def relative_speed(self, ego_speed: float) -> float:
+    if not math.isfinite(ego_speed):
+      raise ValueError("ego speed must be finite")
+    return self.absolute_speed - ego_speed
+
+
+def decode_stinger_2022_triplet(slot: int, payloads: tuple[bytes, ...]) -> Stinger2022CandidateObject | None:
+  if not 0 <= slot < STINGER_2022_RADAR_SLOT_COUNT or len(payloads) != 3 or any(len(dat) != 8 for dat in payloads):
+    return None
+  a, b, c = payloads
+  cycle = _field(a, 44, 2)
+  object_id = _field(a, 56, 7)
+  if cycle != _field(b, 0, 2) or cycle != _field(c, 0, 2):
+    return None
+  if object_id != _field(b, 57, 7) or object_id != _field(c, 43, 7):
+    return None
+  distance_raw = _field(a, 0, 13)
+  if object_id == 0 or distance_raw == 0:
+    return None
+
+  return Stinger2022CandidateObject(
+    slot=slot, object_id=object_id, cycle=cycle, type_raw=_field(a, 13, 3),
+    distance=distance_raw * 0.05, lateral_raw=_field(a, 16, 12) * 0.05 - 102.4,
+    absolute_speed=_field(a, 32, 12) * 0.05 - 100.0,
+  )
+
+
+class Stinger2022ObjectDecoder:
+  def __init__(self):
+    self.frames: dict[tuple[int, int], tuple[int, bytes]] = {}
+
+  def update(self, timestamp_ns: int, address: int, dat: bytes, bus: int) -> Stinger2022CandidateObject | None:
+    if bus != STINGER_2022_RADAR_BUS or not STINGER_2022_RADAR_START_ADDR <= address < STINGER_2022_RADAR_START_ADDR + STINGER_2022_RADAR_MSG_COUNT or len(dat) != 8:
+      return None
+    slot, part = divmod(address - STINGER_2022_RADAR_START_ADDR, 3)
+    self.frames[slot, part] = (timestamp_ns, dat)
+    if part != 2 or any((slot, i) not in self.frames for i in range(3)):
+      return None
+    triple = [self.frames[slot, i] for i in range(3)]
+    times = [t for t, _ in triple]
+
+    # Consume the complete cycle so repeated final frames cannot reuse old parts.
+    for i in range(3):
+      del self.frames[slot, i]
+
+    if max(times) != timestamp_ns or max(times) - min(times) > STINGER_2022_MAX_TRIPLET_SPAN_NS:
+      return None
+
+    return decode_stinger_2022_triplet(slot, tuple(dat for _, dat in triple))
+
 
 
 @dataclass(frozen=True)
@@ -60,6 +133,11 @@ def get_radar_track_config(car_fingerprint, flags: int = 0) -> RadarTrackConfig 
     return RadarTrackConfig(GV70_RADAR_START_ADDR, GV70_RADAR_MSG_COUNT, "gv70_210", bus=0,
                             frequency=20, expected_length=32, dbc_name=GV70_RADAR_DBC)
 
+  if car_fingerprint == CAR.KIA_STINGER_2022:
+    return RadarTrackConfig(STINGER_2022_RADAR_START_ADDR, STINGER_2022_RADAR_MSG_COUNT, "stinger_2022",
+                            bus=STINGER_2022_RADAR_BUS, frequency=50, parser_msg_count=0,
+                            expected_length=8)
+
   radar_dbc = DBC[car_fingerprint].get(Bus.radar)
   if car_fingerprint == CAR.GENESIS_G90 and radar_dbc == HYUNDAI_MANDO_FRONT_RADAR_DBC:
     return RadarTrackConfig(RADAR_START_ADDR, G90_RADAR_MSG_COUNT, "mando", parser_msg_count=RADAR_MSG_COUNT)
@@ -78,7 +156,7 @@ def radar_tracks_available(radar_config: RadarTrackConfig | None, fingerprint) -
   if radar_config is None:
     return False
 
-  if radar_config.radar_type in ("gv70_210", "palisade_210"):
+  if radar_config.radar_type in ("gv70_210", "palisade_210", "stinger_2022"):
     return all(fingerprint[radar_config.bus].get(addr) == radar_config.expected_length
                for addr in range(radar_config.start_addr, radar_config.start_addr + radar_config.msg_count))
 
@@ -93,10 +171,15 @@ def get_radar_can_parser(CP, radar_config):
   if radar_config is None:
     return None
 
+  if radar_config.radar_type == "stinger_2022":
+    messages = [("WHL_SPD11", 50)]
+    return CANParser(DBC[CP.carFingerprint][Bus.pt], messages, 0)
+
   messages = [(f"RADAR_TRACK_{addr:x}", radar_config.frequency)
               for addr in range(radar_config.start_addr, radar_config.start_addr + radar_config.can_parser_msg_count)]
   dbc_name = radar_config.dbc_name or DBC[CP.carFingerprint][Bus.radar]
   return CANParser(dbc_name, messages, radar_config.bus)
+
 
 
 class RadarInterface(RadarInterfaceBase):
@@ -104,9 +187,16 @@ class RadarInterface(RadarInterfaceBase):
     super().__init__(CP)
     self.radar_config = get_radar_track_config(CP.carFingerprint, CP.flags)
     self.updated_messages = set()
-    self.trigger_msg = (self.radar_config.start_addr + self.radar_config.can_parser_msg_count - 1
-                        if self.radar_config is not None else RADAR_START_ADDR)
     self.track_id = 0
+    self.stinger_2022_radar = self.radar_config is not None and self.radar_config.radar_type == "stinger_2022"
+    if self.stinger_2022_radar:
+      self.trigger_msg = STINGER_2022_RADAR_START_ADDR + STINGER_2022_RADAR_MSG_COUNT - 1
+      self.stinger_2022_decoder = Stinger2022ObjectDecoder()
+      self.stinger_2022_objects: dict[int, Stinger2022CandidateObject] = {}
+      self.v_ego = 0.0
+    else:
+      self.trigger_msg = (self.radar_config.start_addr + self.radar_config.can_parser_msg_count - 1
+                          if self.radar_config is not None else RADAR_START_ADDR)
     self.g90_extended_mando = (CP.carFingerprint == CAR.GENESIS_G90 and self.radar_config is not None and
                                self.radar_config.msg_count > self.radar_config.can_parser_msg_count)
     self.g90_mando_signals = []
@@ -126,7 +216,7 @@ class RadarInterface(RadarInterfaceBase):
     # CAN-driven card loop (core 4, shared with controlsd/selfdrived), so avoid
     # rebuilding 32 f-strings per radar frame.
     self.track_addrs: list[tuple[int, str]] = []
-    if self.radar_config is not None:
+    if self.radar_config is not None and not self.stinger_2022_radar:
       self.track_addrs = [(addr, f"RADAR_TRACK_{addr:x}")
                           for addr in range(self.radar_config.start_addr,
                                             self.radar_config.start_addr + self.radar_config.can_parser_msg_count)]
@@ -154,14 +244,17 @@ class RadarInterface(RadarInterfaceBase):
     self.updated_messages.update(vls)
     if self.g90_extended_mando:
       self._update_g90_extended_mando_tracks(can_strings)
+    elif self.stinger_2022_radar:
+      self._update_stinger_2022_tracks(can_strings)
 
     if self.trigger_msg not in self.updated_messages:
       return None
 
-    rr = self._update(self.updated_messages)
+    rr = self._update_stinger_2022(self.updated_messages) if self.stinger_2022_radar else self._update(self.updated_messages)
     self.updated_messages.clear()
 
     return rr
+
 
   def _decode_g90_mando_values(self, dat: bytes):
     vals = {}
@@ -202,6 +295,63 @@ class RadarInterface(RadarInterfaceBase):
           self.pts[address].yvRel = float("nan")
         elif address in self.pts:
           del self.pts[address]
+
+  def _update_stinger_2022_tracks(self, can_strings):
+    if self.radar_config is None:
+      return
+
+    if "WHL_SPD11" in self.rcp.vl and self.rcp.ts_nanos["WHL_SPD11"]["WHL_SPD_FL"] > 0:
+      whl = self.rcp.vl["WHL_SPD11"]
+      wheel_speed = 0.25 * (whl["WHL_SPD_FL"] + whl["WHL_SPD_FR"] + whl["WHL_SPD_RL"] + whl["WHL_SPD_RR"])
+      self.v_ego = wheel_speed * CV.KPH_TO_MS * self.CP.wheelSpeedFactor
+
+    start_addr = self.radar_config.start_addr
+    end_addr = start_addr + self.radar_config.msg_count
+
+    for timestamp_ns, frames in can_strings:
+      for address, dat, src in frames:
+        if src != self.radar_config.bus or not (start_addr <= address < end_addr) or len(dat) != 8:
+          continue
+
+        self.updated_messages.add(address)
+        obj = self.stinger_2022_decoder.update(timestamp_ns, address, bytes(dat), src)
+        if obj is not None:
+          self.stinger_2022_objects[obj.object_id] = obj
+
+  def _update_stinger_2022(self, updated_messages):
+    ret = structs.RadarData()
+    if self.rcp is None:
+      return ret
+
+    if not self.rcp.can_valid or self.rcp.ts_nanos["WHL_SPD11"]["WHL_SPD_FL"] == 0:
+      ret.errors.canError = True
+      return ret
+
+    current_ids = set()
+    for object_id, obj in self.stinger_2022_objects.items():
+      current_ids.add(object_id)
+      pt = self.pts.get(object_id)
+      if pt is None:
+        pt = structs.RadarData.RadarPoint()
+        pt.trackId = self.track_id
+        self.track_id += 1
+        self.pts[object_id] = pt
+
+      pt.measured = True
+      pt.dRel = obj.distance
+      pt.yRel = -obj.lateral_raw  # in car frame's y axis, left is positive
+      pt.vRel = obj.relative_speed(self.v_ego)
+      pt.aRel = float("nan")
+      pt.yvRel = float("nan")
+
+    for oid in list(self.pts.keys()):
+      if oid not in current_ids:
+        del self.pts[oid]
+
+    self.stinger_2022_objects.clear()
+
+    ret.points = list(self.pts.values())
+    return ret
 
   def _update(self, updated_messages):
     ret = structs.RadarData()
