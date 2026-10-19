@@ -11,11 +11,15 @@ from openpilot.selfdrive.test.process_replay import replay_process_with_name
 from openpilot.selfdrive.controls.radard import (
   DT_MDL,
   HONDA_BOSCH_A_RADAR_TS,
+  KIA_STINGER_RADAR_TO_CAMERA,
+  RADAR_TO_CAMERA,
   RadarD,
   POST_STANDSTILL_RADAR_LEAD_PERSISTENCE_FRAMES,
   post_standstill_radar_lead_is_urgent,
   g90_low_speed_radar_lead_sane,
   g90_radar_lead_lateral_sane,
+  get_radar_to_camera_offset,
+  get_RadarState_from_vision,
   has_slow_radar_tracks,
   is_bosch_a_radar_car,
   match_vision_to_track,
@@ -165,6 +169,36 @@ class TestLeads:
     assert post_standstill_radar_lead_is_urgent(lead)
     assert radar._filter_post_standstill_lead(lead)["status"]
     assert not radar._post_standstill_gate_active
+
+  def test_stinger_radar_to_camera_geometry_offset(self):
+    stinger_2022 = SimpleNamespace(carFingerprint="KIA_STINGER_2022")
+    stinger_pre2022 = SimpleNamespace(carFingerprint="KIA_STINGER")
+    g70 = SimpleNamespace(carFingerprint="GENESIS_G70")
+    civic = SimpleNamespace(carFingerprint="HONDA_CIVIC")
+    corolla = SimpleNamespace(carFingerprint="TOYOTA_COROLLA")
+
+    assert get_radar_to_camera_offset(stinger_2022) == pytest.approx(KIA_STINGER_RADAR_TO_CAMERA)
+    assert get_radar_to_camera_offset(stinger_2022) == pytest.approx(2.15)
+    assert get_radar_to_camera_offset(stinger_pre2022) == pytest.approx(KIA_STINGER_RADAR_TO_CAMERA)
+    assert get_radar_to_camera_offset(g70) == pytest.approx(KIA_STINGER_RADAR_TO_CAMERA)
+    assert get_radar_to_camera_offset(civic) == pytest.approx(RADAR_TO_CAMERA)
+    assert get_radar_to_camera_offset(civic) == pytest.approx(1.52)
+    assert get_radar_to_camera_offset(corolla) == pytest.approx(RADAR_TO_CAMERA)
+
+  def test_radard_stores_custom_radar_to_camera_offset(self):
+    radard_default = RadarD()
+    radard_stinger = RadarD(radar_to_camera=KIA_STINGER_RADAR_TO_CAMERA)
+    assert radard_default.radar_to_camera == pytest.approx(RADAR_TO_CAMERA)
+    assert radard_stinger.radar_to_camera == pytest.approx(KIA_STINGER_RADAR_TO_CAMERA)
+
+  def test_get_radar_state_from_vision_respects_geometry_offset(self):
+    lead_msg = self.make_lead(x=10.0, y=0.0, v=0.0)
+    vision_state_stinger = get_RadarState_from_vision(lead_msg, v_ego=0.0, model_v_ego=0.0, model_prob=0.9,
+                                                      radar_to_camera=KIA_STINGER_RADAR_TO_CAMERA)
+    vision_state_default = get_RadarState_from_vision(lead_msg, v_ego=0.0, model_v_ego=0.0, model_prob=0.9,
+                                                      radar_to_camera=RADAR_TO_CAMERA)
+    assert vision_state_stinger["dRel"] == pytest.approx(10.0 - 2.15)
+    assert vision_state_default["dRel"] == pytest.approx(10.0 - 1.52)
 
   @pytest.mark.skipif(platform.system() == "Darwin", reason="SocketEventHandle requires eventfd")
   def test_radar_fault(self):

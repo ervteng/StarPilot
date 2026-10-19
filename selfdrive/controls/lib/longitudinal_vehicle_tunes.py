@@ -113,16 +113,6 @@ KIA_EV9_STOPPED_LEAD_MIN_CLOSING_SPEED = 0.15
 KIA_EV9_STOPPED_LEAD_MAX_DISTANCE = 30.0
 KIA_EV9_STOPPED_LEAD_RAMP_DISTANCE = 8.0
 KIA_EV9_STOPPED_LEAD_MAX_LATERAL_OFFSET = 1.75
-KIA_STINGER_2022_STOPPED_LEAD_OBSTACLE_BIAS_M = 2.0
-KIA_STINGER_2022_STOPPED_LEAD_MAX_DISTANCE = 45.0
-KIA_STINGER_2022_STOPPED_LEAD_RAMP_DISTANCE = 12.0
-KIA_STINGER_2022_STOPPED_LEAD_MAX_EGO_SPEED = 18.0
-KIA_STINGER_2022_STOPPED_LEAD_RAMP_EGO_SPEED = 14.0
-KIA_STINGER_2022_STOPPED_LEAD_MAX_LEAD_SPEED = 6.0
-KIA_STINGER_2022_STOPPED_LEAD_RAMP_LEAD_SPEED = 2.5
-KIA_STINGER_2022_STOPPED_LEAD_MIN_CLOSING_SPEED = -3.0
-KIA_STINGER_2022_STOPPED_LEAD_RAMP_CLOSING_SPEED = -0.5
-KIA_STINGER_2022_STOPPED_LEAD_MAX_LATERAL_OFFSET = 1.75
 HONDA_CRV_5G_LOW_SPEED_STOP_MAX_EGO_SPEED = 4.5
 HONDA_CRV_5G_LOW_SPEED_STOP_MAX_LEAD_SPEED = 0.5
 HONDA_CRV_5G_LOW_SPEED_STOP_MIN_MODEL_PROB = 0.99
@@ -367,48 +357,6 @@ def get_kia_ev9_stopped_lead_obstacle_bias(CP, lead, v_ego):
   return float(min(bias, max(distance - 0.5, 0.0)))
 
 
-def get_kia_stinger_2022_stopped_lead_obstacle_bias(CP, lead, v_ego):
-  if (
-    getattr(CP, "brand", "") != "hyundai" or
-    str(getattr(CP, "carFingerprint", "")) != "KIA_STINGER_2022" or
-    lead is None or not bool(getattr(lead, "status", False)) or
-    float(v_ego) <= 0.0 or float(v_ego) > KIA_STINGER_2022_STOPPED_LEAD_MAX_EGO_SPEED or
-    abs(float(getattr(lead, "yRel", 0.0))) > KIA_STINGER_2022_STOPPED_LEAD_MAX_LATERAL_OFFSET
-  ):
-    return 0.0
-
-  distance = float(getattr(lead, "dRel", float("inf")))
-  lead_speed = max(float(getattr(lead, "vLead", 0.0)), 0.0)
-  closing_speed = float(v_ego) - lead_speed
-
-  if distance <= 0.0 or distance > KIA_STINGER_2022_STOPPED_LEAD_MAX_DISTANCE:
-    return 0.0
-
-  dist_factor = np.clip(
-    (KIA_STINGER_2022_STOPPED_LEAD_MAX_DISTANCE - distance) /
-    (KIA_STINGER_2022_STOPPED_LEAD_MAX_DISTANCE - KIA_STINGER_2022_STOPPED_LEAD_RAMP_DISTANCE),
-    0.0, 1.0,
-  )
-  lead_v_factor = np.clip(
-    (KIA_STINGER_2022_STOPPED_LEAD_MAX_LEAD_SPEED - lead_speed) /
-    (KIA_STINGER_2022_STOPPED_LEAD_MAX_LEAD_SPEED - KIA_STINGER_2022_STOPPED_LEAD_RAMP_LEAD_SPEED),
-    0.0, 1.0,
-  )
-  ego_v_factor = np.clip(
-    (KIA_STINGER_2022_STOPPED_LEAD_MAX_EGO_SPEED - float(v_ego)) /
-    (KIA_STINGER_2022_STOPPED_LEAD_MAX_EGO_SPEED - KIA_STINGER_2022_STOPPED_LEAD_RAMP_EGO_SPEED),
-    0.0, 1.0,
-  )
-  closing_factor = np.clip(
-    (closing_speed - KIA_STINGER_2022_STOPPED_LEAD_MIN_CLOSING_SPEED) /
-    (KIA_STINGER_2022_STOPPED_LEAD_RAMP_CLOSING_SPEED - KIA_STINGER_2022_STOPPED_LEAD_MIN_CLOSING_SPEED),
-    0.0, 1.0,
-  )
-
-  bias = KIA_STINGER_2022_STOPPED_LEAD_OBSTACLE_BIAS_M * dist_factor * lead_v_factor * ego_v_factor * closing_factor
-  return float(min(bias, max(distance - 0.5, 0.0)))
-
-
 def get_stopped_lead_obstacle_bias(CP, lead, v_ego, mode):
   """Dispatch vehicle-specific stopped-lead spacing tweaks for the active mode."""
   mode_bias = 0.0
@@ -420,7 +368,6 @@ def get_stopped_lead_obstacle_bias(CP, lead, v_ego, mode):
   return max(
     mode_bias,
     get_kia_ev9_stopped_lead_obstacle_bias(CP, lead, v_ego),
-    get_kia_stinger_2022_stopped_lead_obstacle_bias(CP, lead, v_ego),
   )
 
 

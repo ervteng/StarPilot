@@ -42,7 +42,6 @@ from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import (
   get_honda_accord_stop_go_accel_cap,
   get_honda_crv_5g_stopped_lead_obstacle_bias,
   get_kia_ev9_stopped_lead_obstacle_bias,
-  get_kia_stinger_2022_stopped_lead_obstacle_bias,
   get_stopped_lead_obstacle_bias,
   get_honda_crv_5g_low_speed_stopped_lead_cap,
   allow_honda_crv_5g_vision_gap_settle,
@@ -211,35 +210,15 @@ def test_kia_ev9_stopped_lead_buffer_is_low_speed_and_vehicle_specific():
   ) == pytest.approx(0.0)
 
 
-def test_kia_stinger_2022_stopped_lead_buffer_is_smooth_and_vehicle_specific():
+def test_kia_stinger_2022_has_clean_zero_stopped_lead_bias():
   stinger = HyundaiCarInterface.get_non_essential_params(HYUNDAI_CAR.KIA_STINGER_2022)
   other = HyundaiCarInterface.get_non_essential_params(HYUNDAI_CAR.KIA_EV6)
-  prius = ToyotaCarInterface.get_non_essential_params(TOYOTA_CAR.TOYOTA_PRIUS)
   stopped_lead = make_lead(status=True, d_rel=8.0, v_lead=0.0, radar=True, model_prob=0.99)
 
-  # Full bias inside 12m at low speed
-  bias = get_kia_stinger_2022_stopped_lead_obstacle_bias(stinger, stopped_lead, v_ego=3.0)
-  assert bias == pytest.approx(2.0)
-  assert get_kia_stinger_2022_stopped_lead_obstacle_bias(other, stopped_lead, v_ego=3.0) == pytest.approx(0.0)
-  assert get_kia_stinger_2022_stopped_lead_obstacle_bias(stinger, stopped_lead, v_ego=25.0) == pytest.approx(0.0)
-
-  # Works across modes via get_stopped_lead_obstacle_bias
-  assert get_stopped_lead_obstacle_bias(stinger, stopped_lead, v_ego=3.0, mode="blended") == pytest.approx(2.0)
-  assert get_stopped_lead_obstacle_bias(stinger, stopped_lead, v_ego=3.0, mode="acc") == pytest.approx(2.0)
+  # Stinger uses clean zero bias to eliminate two-stage stop discontinuities
+  assert get_stopped_lead_obstacle_bias(stinger, stopped_lead, v_ego=3.0, mode="blended") == pytest.approx(0.0)
+  assert get_stopped_lead_obstacle_bias(stinger, stopped_lead, v_ego=3.0, mode="acc") == pytest.approx(0.0)
   assert get_stopped_lead_obstacle_bias(other, stopped_lead, v_ego=3.0, mode="blended") == pytest.approx(0.0)
-
-  # Tolerates standstill radar Doppler jitter (+0.8 m/s lead speed, negative closing)
-  jitter_lead = make_lead(status=True, d_rel=3.5, v_lead=0.8, radar=True, model_prob=0.99)
-  jitter_bias = get_kia_stinger_2022_stopped_lead_obstacle_bias(stinger, jitter_lead, v_ego=0.1)
-  assert jitter_bias > 1.8
-
-  # Smoothly active in 8-10 mph dense city queue traffic (dRel=10m, vLead=4m/s, vEgo=4.2m/s)
-  traffic_lead = make_lead(status=True, d_rel=10.0, v_lead=4.0, radar=True, model_prob=0.99)
-  traffic_bias = get_kia_stinger_2022_stopped_lead_obstacle_bias(stinger, traffic_lead, v_ego=4.2)
-  assert 1.0 < traffic_bias < 2.0
-
-  # Fades out at highway speeds (> 18 m/s = 40 mph)
-  assert get_kia_stinger_2022_stopped_lead_obstacle_bias(stinger, stopped_lead, v_ego=19.0) == pytest.approx(0.0)
 
 
 def test_honda_crv_5g_early_radar_follow_admits_high_closing_centered_lead():
