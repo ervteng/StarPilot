@@ -86,6 +86,20 @@ def calculate_canfd_speed_limit(CP, FPCP, cp, cp_cam, speed_factor):
     return 0.0
 
 
+def calculate_can_speed_limit(FPCP, cp, cp_cam, speed_conv):
+  # Based on sunnypilot's HKG CAN speed limit handling (MIT)
+  flags = getattr(FPCP, "flags", 0)
+  if not (flags & HyundaiStarPilotFlags.SPEED_LIMIT_AVAILABLE):
+    return 0.0
+
+  speed_limit = 0
+  if flags & HyundaiStarPilotFlags.HAS_LKAS12:
+    speed_limit = cp_cam.vl["LKAS12"]["CF_Lkas_TsrSpeed_Display_Clu"]
+  if speed_limit in (0, 255):
+    speed_limit = cp.vl["Navi_HU"]["SpeedLim_Nav_Clu"]
+  return speed_limit * speed_conv if speed_limit not in (0, 255) else 0.0
+
+
 def get_canfd_cruise_available(CP, cp, scc_available: bool) -> bool:
   # The EV9 fallback keeps stock ACC active when ECU disable is skipped. Its
   # SCC status remains inactive in that mode, while TCS still reports whether
@@ -527,6 +541,7 @@ class CarState(CarStateBase):
     ret.lowSpeedAlert = self.low_speed_alert
 
     fp_ret = custom.StarPilotCarState.new_message()
+    fp_ret.dashboardSpeedLimit = calculate_can_speed_limit(self.FPCP, cp, cp_cam, speed_conv)
     if self.CP.carFingerprint in CLASSIC_MEDIA_BUTTON_CARS:
       fp_ret.modePressed = bool(cp.vl["GW_SWRC_PE"]["C_ModeSW"])
       fp_ret.customPressed = bool(cp.vl["GW_SWRC_PE"]["C_MTSSW"])
@@ -790,6 +805,8 @@ class CarState(CarStateBase):
       ("BCM_PO_11", 0),
       ("CLU13", 0),
     ]
+    if getattr(self.FPCP, "flags", 0) & HyundaiStarPilotFlags.SPEED_LIMIT_AVAILABLE:
+      msgs.append(("Navi_HU", 0))
     if CP.carFingerprint == CAR.KIA_RAY_EV:
       msgs += [
         ("LABEL11", 10),

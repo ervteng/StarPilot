@@ -5,6 +5,7 @@ import pytest
 
 from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus, ButtonType, gen_empty_fingerprint, structs
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.structs import CarControl, CarParams
 from opendbc.car.fw_versions import build_fw_dict, match_fw_to_car
 from opendbc.car.hyundai.carcontroller import CarController, CANCEL_BUTTON_DELAY_FRAMES, Ioniq6LongitudinalTuningState, GenesisG90LongitudinalTuningState, \
@@ -21,8 +22,8 @@ from opendbc.car.hyundai.carcontroller import CarController, CANCEL_BUTTON_DELAY
                                              preserve_stock_canfd_lfa_status, \
                                              preserve_stock_canfd_lkas_status, \
                                              suppress_redundant_gv70_brake_cancel
-from opendbc.car.hyundai.carstate import CarState, Ev6AolArmingState, decode_canfd_camera_lead, decode_ioniq_6_blindspot_radar_state, \
-                                             get_canfd_cruise_available
+from opendbc.car.hyundai.carstate import CarState, Ev6AolArmingState, calculate_can_speed_limit, decode_canfd_camera_lead, \
+                                             decode_ioniq_6_blindspot_radar_state, get_canfd_cruise_available
 from opendbc.car.hyundai.interface import CarInterface, KIA_EV9_ACCEL_MAX, get_communication_control_request
 from opendbc.car.hyundai import hyundaican, hyundaicanfd
 from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum
@@ -1373,6 +1374,70 @@ class TestHyundaiFingerprint:
     FPCP = CarInterface.get_starpilot_params(CAR.HYUNDAI_SONATA_HYBRID, fingerprint, [], CP, get_test_toggles())
 
     assert FPCP.flags & HyundaiStarPilotFlags.HAS_LKAS12
+
+  @pytest.mark.parametrize("candidate, bus0_addrs, expected", (
+    (CAR.HYUNDAI_SONATA, {0x544: 8}, True),
+    (CAR.HYUNDAI_SONATA, {}, False),
+    (CAR.HYUNDAI_SONATA, {0x1FA: 8}, False),
+    (CAR.KIA_RAY_EV, {0x544: 8}, True),
+    (CAR.KIA_EV6, {0x544: 8}, False),
+    (CAR.KIA_EV6, {0x1FA: 8}, True),
+    (CAR.KIA_EV6, {}, False),
+  ))
+  def test_speed_limit_available_flag(self, candidate, bus0_addrs, expected):
+    fingerprint = gen_empty_fingerprint()
+    fingerprint[0].update(bus0_addrs)
+    CP = CarInterface.get_params(candidate, fingerprint, [], False, False, False, None)
+    FPCP = CarInterface.get_starpilot_params(candidate, fingerprint, [], CP, get_test_toggles())
+
+    assert bool(FPCP.flags & HyundaiStarPilotFlags.SPEED_LIMIT_AVAILABLE) is expected
+
+  @staticmethod
+  def _can_speed_limit(candidate, nav, camera=None, lkas12_len=6, speed_conv=CV.MPH_TO_MS, navi_on_bus0=True):
+    fingerprint = gen_empty_fingerprint()
+    if navi_on_bus0:
+      fingerprint[0][0x544] = 8
+    if camera is not None:
+      fingerprint[2][0x53E] = lkas12_len
+    CP = CarInterface.get_params(candidate, fingerprint, [], False, False, False, None)
+    FPCP = CarInterface.get_starpilot_params(candidate, fingerprint, [], CP, get_test_toggles())
+    parsers = CarState(CP, FPCP).get_can_parsers(CP)
+    packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
+
+    parsers[Bus.pt].update([(1, [packer.make_can_msg("Navi_HU", 0, {"SpeedLim_Nav_Clu": nav})])])
+    if camera is not None:
+      parsers[Bus.cam].update([(1, [packer.make_can_msg("LKAS12", 2, {"CF_Lkas_TsrSpeed_Display_Clu": camera})])])
+    return FPCP, calculate_can_speed_limit(FPCP, parsers[Bus.pt], parsers[Bus.cam], speed_conv)
+
+  @pytest.mark.parametrize("speed_conv", (CV.MPH_TO_MS, CV.KPH_TO_MS), ids=("mph", "kph"))
+  def test_can_speed_limit_from_nav(self, speed_conv):
+    _, speed_limit = self._can_speed_limit(CAR.HYUNDAI_SONATA, 25, speed_conv=speed_conv)
+    assert speed_limit == pytest.approx(25 * speed_conv)
+
+  @pytest.mark.parametrize("nav", (0, 255))
+  def test_can_speed_limit_no_limit_values(self, nav):
+    _, speed_limit = self._can_speed_limit(CAR.HYUNDAI_SONATA, nav)
+    assert speed_limit == 0
+
+  def test_can_speed_limit_requires_flag(self):
+    FPCP, speed_limit = self._can_speed_limit(CAR.HYUNDAI_SONATA, 25, navi_on_bus0=False)
+    assert not (FPCP.flags & HyundaiStarPilotFlags.SPEED_LIMIT_AVAILABLE)
+    assert speed_limit == 0
+
+  def test_can_speed_limit_prefers_camera(self):
+    FPCP, speed_limit = self._can_speed_limit(CAR.HYUNDAI_SONATA, 25, camera=40)
+    assert FPCP.flags & HyundaiStarPilotFlags.HAS_LKAS12
+    assert speed_limit == pytest.approx(40 * CV.MPH_TO_MS)
+
+  @pytest.mark.parametrize("camera", (0, 255))
+  def test_can_speed_limit_falls_back_to_nav(self, camera):
+    _, speed_limit = self._can_speed_limit(CAR.HYUNDAI_SONATA, 25, camera=camera)
+    assert speed_limit == pytest.approx(25 * CV.MPH_TO_MS)
+
+  def test_stinger_eight_byte_53e_not_used_as_camera_speed_limit(self):
+    FPCP, speed_limit = self._can_speed_limit(CAR.KIA_STINGER_2022, 25, camera=40, lkas12_len=8)
+    assert not (FPCP.flags & HyundaiStarPilotFlags.HAS_LKAS12)
+    assert speed_limit == pytest.approx(25 * CV.MPH_TO_MS)
 
   def test_carnival_lka_button_does_not_enable_angle_steering_safety(self):
     fingerprint = gen_empty_fingerprint()
