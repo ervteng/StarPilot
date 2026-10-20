@@ -22,8 +22,8 @@ from opendbc.car.hyundai.carcontroller import CarController, CANCEL_BUTTON_DELAY
                                              preserve_stock_canfd_lfa_status, \
                                              preserve_stock_canfd_lkas_status, \
                                              suppress_redundant_gv70_brake_cancel
-from opendbc.car.hyundai.carstate import CarState, Ev6AolArmingState, calculate_can_speed_limit, decode_canfd_camera_lead, \
-                                             decode_ioniq_6_blindspot_radar_state, get_canfd_cruise_available
+from opendbc.car.hyundai.carstate import ISG_RESTART_GRACE_FRAMES, CarState, Ev6AolArmingState, calculate_can_speed_limit, \
+                                             decode_canfd_camera_lead, decode_ioniq_6_blindspot_radar_state, get_canfd_cruise_available
 from opendbc.car.hyundai.interface import CarInterface, KIA_EV9_ACCEL_MAX, get_communication_control_request
 from opendbc.car.hyundai import hyundaican, hyundaicanfd
 from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum
@@ -1451,6 +1451,51 @@ class TestHyundaiFingerprint:
     assert calculate_can_speed_limit(FPCP, parsers[Bus.pt], parsers[Bus.cam], CV.MPH_TO_MS) == 0
     assert "Navi_HU" not in parsers[Bus.pt].vl
     assert "LKAS12" not in parsers[Bus.cam].vl
+  @staticmethod
+  def _isg_steer_fault(candidate, fingerprint=None):
+    toggles = get_test_toggles()
+    fingerprint = fingerprint or gen_empty_fingerprint()
+    CP = CarInterface.get_params(candidate, fingerprint, [], False, False, False, toggles)
+    FPCP = CarInterface.get_starpilot_params(candidate, fingerprint, [], CP, toggles)
+    CS = CarState(CP, FPCP)
+    parsers = CS.get_can_parsers(CP)
+    packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
+    frame = 0
+
+    def update(isg_state, unavail=1, fault=0, speed=0.):
+      nonlocal frame
+      frame += 1
+      msgs = [
+        packer.make_can_msg("MDPS12", 0, {"CF_Mdps_ToiUnavail": unavail, "CF_Mdps_ToiFlt": fault}),
+        packer.make_can_msg("LVR12", 0, {"CF_Lvr_IsgState": isg_state}),
+        packer.make_can_msg("WHL_SPD11", 0, {f"WHL_SPD_{w}": speed for w in ("FL", "FR", "RL", "RR")}),
+      ]
+      parsers[Bus.pt].update([(frame * 10_000_000, msgs)])
+      return CS.update(parsers, toggles)[0].steerFaultTemporary
+
+    update(isg_state=0, unavail=0)  # registers the lazily parsed messages
+    return update
+
+  def test_isg_engine_stop_is_not_a_steer_fault(self):
+    update = self._isg_steer_fault(CAR.KIA_STINGER_2022)
+    assert update(isg_state=0)
+    assert not update(isg_state=1)
+    assert update(isg_state=1, fault=1)
+    assert update(isg_state=1, speed=20.)
+
+  def test_isg_engine_restart_grace(self):
+    update = self._isg_steer_fault(CAR.KIA_STINGER_2022)
+    assert not update(isg_state=1)
+    assert not update(isg_state=2)
+    for _ in range(ISG_RESTART_GRACE_FRAMES):
+      update(isg_state=0)
+    assert update(isg_state=0)
+
+  def test_isg_steer_fault_kept_for_steer_at_standstill(self):
+    fingerprint = gen_empty_fingerprint()
+    fingerprint[0][0x2AA] = 8
+    update = self._isg_steer_fault(CAR.HYUNDAI_SONATA, fingerprint)
+    assert update(isg_state=1)
 
   def test_carnival_lka_button_does_not_enable_angle_steering_safety(self):
     fingerprint = gen_empty_fingerprint()
