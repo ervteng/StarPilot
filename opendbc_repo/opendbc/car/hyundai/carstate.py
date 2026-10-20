@@ -92,10 +92,12 @@ def calculate_can_speed_limit(FPCP, cp, cp_cam, speed_conv):
   if not (flags & HyundaiStarPilotFlags.SPEED_LIMIT_AVAILABLE):
     return 0.0
 
+  # Only read messages the parsers declared: a lazy vl[] lookup would register them as required and
+  # flag canValid false on any bus that doesn't carry them.
   speed_limit = 0
-  if flags & HyundaiStarPilotFlags.HAS_LKAS12:
+  if flags & HyundaiStarPilotFlags.HAS_LKAS12 and "LKAS12" in cp_cam.vl:
     speed_limit = cp_cam.vl["LKAS12"]["CF_Lkas_TsrSpeed_Display_Clu"]
-  if speed_limit in (0, 255):
+  if speed_limit in (0, 255) and "Navi_HU" in cp.vl:
     speed_limit = cp.vl["Navi_HU"]["SpeedLim_Nav_Clu"]
   return speed_limit * speed_conv if speed_limit not in (0, 255) else 0.0
 
