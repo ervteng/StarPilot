@@ -30,6 +30,13 @@ STINGER_2022_RADAR_SLOT_COUNT = 10
 STINGER_2022_RADAR_MSG_COUNT = 30
 STINGER_2022_MAX_TRIPLET_SPAN_NS = 20_000_000
 
+# A lead that brakes to a stop is reported at about -0.3 to -0.6 m/s for 1-3 s before settling at 0,
+# while the stock SCC11 lead stays near -0.1 over the same stops. Left raw, radard's KF turns the
+# recovery into a positive aLeadK for a parked car. Small negative speeds of near-centre objects are
+# treated as stopped; oncoming and adjacent-lane traffic is left as measured.
+STINGER_2022_STOP_UNDERSHOOT_SPEED = -0.7  # m/s
+STINGER_2022_STOP_UNDERSHOOT_MAX_LATERAL = 2.0  # m
+
 
 def _field(dat: bytes, start: int, size: int) -> int:
   return (int.from_bytes(dat, "big") >> (64 - start - size)) & ((1 << size) - 1)
@@ -48,7 +55,13 @@ class Stinger2022CandidateObject:
   def relative_speed(self, ego_speed: float) -> float:
     if not math.isfinite(ego_speed):
       raise ValueError("ego speed must be finite")
-    return self.absolute_speed - ego_speed
+    return self.settled_absolute_speed() - ego_speed
+
+  def settled_absolute_speed(self) -> float:
+    if STINGER_2022_STOP_UNDERSHOOT_SPEED < self.absolute_speed < 0.0 and \
+       abs(self.lateral_raw) < STINGER_2022_STOP_UNDERSHOOT_MAX_LATERAL:
+      return 0.0
+    return self.absolute_speed
 
 
 def decode_stinger_2022_triplet(slot: int, payloads: tuple[bytes, ...]) -> Stinger2022CandidateObject | None:
