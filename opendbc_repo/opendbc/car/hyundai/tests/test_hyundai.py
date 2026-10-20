@@ -1314,6 +1314,7 @@ class TestHyundaiFingerprint:
     (CAR.HYUNDAI_SONATA, {}, False),
     (CAR.HYUNDAI_SONATA, {0x1FA: 8}, False),
     (CAR.KIA_RAY_EV, {0x544: 8}, True),
+    (CAR.HYUNDAI_PALISADE_2023, {0x544: 8}, False),
     (CAR.KIA_EV6, {0x544: 8}, False),
     (CAR.KIA_EV6, {0x1FA: 8}, True),
     (CAR.KIA_EV6, {}, False),
@@ -1372,6 +1373,18 @@ class TestHyundaiFingerprint:
     FPCP, speed_limit = self._can_speed_limit(CAR.KIA_STINGER_2022, 25, camera=40, lkas12_len=8)
     assert not (FPCP.flags & HyundaiStarPilotFlags.HAS_LKAS12)
     assert speed_limit == pytest.approx(25 * CV.MPH_TO_MS)
+
+  def test_can_speed_limit_skips_undeclared_messages(self):
+    # If the flag is set without the parsers declaring the messages, don't lazily register them (would break canValid)
+    CP = CarInterface.get_params(CAR.HYUNDAI_SONATA, gen_empty_fingerprint(), [], False, False, False, None)
+    FPCP = CarInterface.get_starpilot_params(CAR.HYUNDAI_SONATA, gen_empty_fingerprint(), [], CP, get_test_toggles())
+    parsers = CarState(CP, FPCP).get_can_parsers(CP)
+    FPCP.flags |= HyundaiStarPilotFlags.SPEED_LIMIT_AVAILABLE.value | HyundaiStarPilotFlags.HAS_LKAS12.value
+    parsers[Bus.cam].vl.pop("LKAS12", None)
+
+    assert calculate_can_speed_limit(FPCP, parsers[Bus.pt], parsers[Bus.cam], CV.MPH_TO_MS) == 0
+    assert "Navi_HU" not in parsers[Bus.pt].vl
+    assert "LKAS12" not in parsers[Bus.cam].vl
 
   def test_carnival_lka_button_does_not_enable_angle_steering_safety(self):
     fingerprint = gen_empty_fingerprint()

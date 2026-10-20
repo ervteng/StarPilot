@@ -243,7 +243,7 @@ class CarInterfaceBase(ABC):
           fp_ret.isHDA2 = hda2
           if 0x1FA in fingerprint[CAN.ECAN]:
             fp_ret.flags |= HyundaiStarPilotFlags.SPEED_LIMIT_AVAILABLE.value
-        elif 0x544 in fingerprint[0] and not (CP.flags & HyundaiFlags.CANFD):
+        elif 0x544 in fingerprint[0] and not (CP.flags & (HyundaiFlags.CANFD | HyundaiFlags.CAN_CANFD_BLENDED)):
           fp_ret.flags |= HyundaiStarPilotFlags.SPEED_LIMIT_AVAILABLE.value
 
         if candidate != HYUNDAI.KIA_RAY_EV and not (CP.flags & HyundaiFlags.CANFD) and 0x53E in fingerprint[2] and \
