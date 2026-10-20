@@ -28,7 +28,8 @@ from opendbc.car.hyundai import hyundaican, hyundaicanfd
 from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum
 from opendbc.car.hyundai.lead_data import CanLeadData, CanLeadDataState
 from opendbc.car.hyundai.radar_interface import MRREVO14F_RADAR_START_ADDR, MRR30_RADAR_START_ADDR, MRR35_RADAR_START_ADDR, \
-                                             RADAR_START_ADDR, RadarInterface, get_radar_track_config, radar_tracks_available
+                                             RADAR_START_ADDR, RadarInterface, decode_stinger_2022_triplet, \
+                                             get_radar_track_config, radar_tracks_available
 from opendbc.car.hyundai.values import CAMERA_SCC_CAR, CANFD_CAR, CAN_GEARS, CAR, CHECKSUM, DATE_FW_ECUS, DATELESS_FUZZY_CARS, \
                                          HYBRID_CAR, EV_CAR, FW_QUERY_CONFIG, LEGACY_SAFETY_MODE_CAR, CANFD_FUZZY_WHITELIST, \
                                          UNSUPPORTED_LONGITUDINAL_CAR, PLATFORM_CODE_ECUS, HYUNDAI_VERSION_REQUEST_LONG, \
@@ -1505,6 +1506,31 @@ class TestHyundaiFingerprint:
 
     raw_button_msg = packer.make_can_msg("BCM_PO_11", 0, {"RAY_LKAS_BTN": 1})
     assert raw_button_msg[1][0] == 0x10
+
+  @staticmethod
+  def stinger_triplet(absolute_speed: float, lateral: float = -0.2):
+    # Golden triplet (object_id=24, distance=10.85) with the speed and lateral fields rewritten
+    a, b, c = (bytes.fromhex(dat) for dat in ("06ca7fcb8379f530", "8fc973d946180b18", "89504654ffe604e8"))
+    raw = int.from_bytes(a, "big")
+    for start, size, value in ((16, 12, round((lateral + 102.4) / 0.05)), (32, 12, round((absolute_speed + 100.0) / 0.05))):
+      shift = 64 - start - size
+      raw = (raw & ~(((1 << size) - 1) << shift)) | (value << shift)
+    return decode_stinger_2022_triplet(0, (raw.to_bytes(8, "big"), b, c))
+
+  @pytest.mark.parametrize("absolute_speed, lateral, settled", [
+    (-0.45, -0.2, 0.0),   # in-path lead settling after braking to a stop
+    (-0.65, 1.5, 0.0),
+    (-0.75, -0.2, -0.75),  # beyond the undershoot band: measured reversal
+    (-0.45, 3.0, -0.45),   # adjacent lane: left as measured
+    (-2.5, 5.0, -2.5),     # oncoming traffic
+    (0.0, -0.2, 0.0),
+    (1.2, -0.2, 1.2),
+  ])
+  def test_kia_stinger_radar_stopped_lead_undershoot(self, absolute_speed, lateral, settled):
+    obj = self.stinger_triplet(absolute_speed, lateral)
+    assert obj.absolute_speed == pytest.approx(absolute_speed)
+    assert obj.settled_absolute_speed() == pytest.approx(settled)
+    assert obj.relative_speed(5.0) == pytest.approx(settled - 5.0)
 
   def test_kia_stinger_lfa_button(self):
     toggles = get_test_toggles()
