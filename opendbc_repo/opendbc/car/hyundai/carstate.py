@@ -20,6 +20,8 @@ ButtonType = structs.CarState.ButtonEvent.Type
 PREV_BUTTON_SAMPLES = 8
 CLUSTER_SAMPLE_RATE = 20  # frames
 STANDSTILL_THRESHOLD = 12 * 0.03125
+ISG_ENGINE_STOPPED = 1  # LVR12 CF_Lvr_IsgState "activated"
+ISG_RESTART_GRACE_FRAMES = 20  # the MDPS clears ToiUnavail ~60 ms after the engine restarts
 
 # Cancel button can sometimes be ACC pause/resume button, main button can also enable on some cars
 ENABLE_BUTTONS = (Buttons.RES_ACCEL, Buttons.SET_DECEL, Buttons.CANCEL)
@@ -123,6 +125,7 @@ class CarState(CarStateBase):
     self.main_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
     self.lda_button = 0
     self.sonata_hybrid_lkas_source = None
+    self.isg_steer_grace_frames = 0
     self.sonata_hybrid_lkas_sources = {
       "bcm": 0,
       "clu13": 0,
@@ -471,6 +474,18 @@ class CarState(CarStateBase):
       gear = cp.vl["LVR12"]["CF_Lvr_Gear"]
 
     ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(gear))
+
+    # The MDPS sets ToiUnavail while Idle Stop and Go has the engine off. Lateral is inactive at standstill,
+    # so don't report it as a steering fault. Only read LVR12 if it's already parsed and its DBC has the signal.
+    if "LVR12" in cp.vl and "CF_Lvr_IsgState" in cp.vl["LVR12"] and ret.standstill and not self.CP.steerAtStandstill:
+      if cp.vl["LVR12"]["CF_Lvr_IsgState"] == ISG_ENGINE_STOPPED:
+        self.isg_steer_grace_frames = ISG_RESTART_GRACE_FRAMES
+      elif self.isg_steer_grace_frames > 0:
+        self.isg_steer_grace_frames -= 1
+      if self.isg_steer_grace_frames > 0 and cp.vl["MDPS12"]["CF_Mdps_ToiFlt"] == 0:
+        ret.steerFaultTemporary = False
+    else:
+      self.isg_steer_grace_frames = 0
 
     if (not self.CP.openpilotLongitudinalControl or self.CP.flags & HyundaiFlags.CAMERA_SCC) and \
         not (self.CP.flags & HyundaiFlags.CAN_CANFD_BLENDED):
