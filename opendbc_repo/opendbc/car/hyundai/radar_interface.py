@@ -37,6 +37,12 @@ STINGER_2022_MAX_TRIPLET_SPAN_NS = 20_000_000
 STINGER_2022_STOP_UNDERSHOOT_SPEED = -0.7  # m/s
 STINGER_2022_STOP_UNDERSHOOT_MAX_LATERAL = 2.0  # m
 
+# Absolute speed minus the wheel-speed average reads ~0.14 m/s more closing than the stock SCC11 lead
+# (ACC_ObjRelSpd) whenever the car is moving, and matches it at standstill: the radar's own ego speed
+# runs below the wheel speeds. Ramp the correction in over the first 1 m/s so standstill is unchanged.
+STINGER_2022_EGO_SPEED_OFFSET = 0.14  # m/s
+STINGER_2022_EGO_SPEED_OFFSET_RAMP = 1.0  # m/s
+
 
 def _field(dat: bytes, start: int, size: int) -> int:
   return (int.from_bytes(dat, "big") >> (64 - start - size)) & ((1 << size) - 1)
@@ -55,7 +61,8 @@ class Stinger2022CandidateObject:
   def relative_speed(self, ego_speed: float) -> float:
     if not math.isfinite(ego_speed):
       raise ValueError("ego speed must be finite")
-    return self.settled_absolute_speed() - ego_speed
+    radar_ego_speed = ego_speed - STINGER_2022_EGO_SPEED_OFFSET * min(max(ego_speed, 0.0) / STINGER_2022_EGO_SPEED_OFFSET_RAMP, 1.0)
+    return self.settled_absolute_speed() - radar_ego_speed
 
   def settled_absolute_speed(self) -> float:
     if STINGER_2022_STOP_UNDERSHOOT_SPEED < self.absolute_speed < 0.0 and \
