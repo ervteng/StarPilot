@@ -54,9 +54,9 @@ def test_invalid_slot_variant_is_migrated_off_slot(tmp_path, monkeypatch):
   assert payload["activeVariant"] == tg.DEFAULT_TESTING_GROUND_VARIANT
 
 
-def test_stinger_long_tune_slot_offers_off_dynamic_predictive(tmp_path, monkeypatch):
+def test_stinger_long_tune_slot_offers_off_dynamic_predictive_stock_like(tmp_path, monkeypatch):
   assert tg.TESTING_GROUND_9 in tg.TESTING_GROUND_IDS
-  assert set(tg.TESTING_GROUND_VARIANT_LABELS[tg.TESTING_GROUND_9]) == {"A", "B", "C"}
+  assert set(tg.TESTING_GROUND_VARIANT_LABELS[tg.TESTING_GROUND_9]) == {"A", "B", "C", "D"}
 
   state_path = tmp_path / "slots.json"
   state_path.write_text(json.dumps({
@@ -69,3 +69,14 @@ def test_stinger_long_tune_slot_offers_off_dynamic_predictive(tmp_path, monkeypa
   monkeypatch.setattr(tg, "_CACHE_LAST_MTIME_NS", -1)
 
   assert tg.get_testing_ground_selection(refresh_interval_s=0.0) == (tg.TESTING_GROUND_9, "C")
+
+  for variant in ("A", "B", "C", "D"):
+    state_path.write_text(json.dumps({
+      "schemaVersion": tg.TESTING_GROUNDS_SCHEMA_VERSION,
+      "activeSlot": tg.TESTING_GROUND_9,
+      "activeVariant": variant,
+    }), encoding="utf-8")
+    monkeypatch.setattr(tg, "_CACHE_LAST_REFRESH", 0.0)
+    monkeypatch.setattr(tg, "_CACHE_LAST_MTIME_NS", -1)
+    assert tg.get_testing_ground_selection(refresh_interval_s=0.0) == (tg.TESTING_GROUND_9, variant)
+  assert tg.TESTING_GROUND_VARIANT_LABELS[tg.TESTING_GROUND_9]["D"] == "D - Stock-like"

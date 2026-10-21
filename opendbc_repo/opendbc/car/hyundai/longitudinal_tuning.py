@@ -18,6 +18,7 @@ class LongitudinalTuningMode:
   OFF = 0
   DYNAMIC = 1
   PREDICTIVE = 2
+  STOCK_LIKE = 3  # state machine lives in carcontroller (update_kia_stinger_longitudinal_tuning)
 
 
 UPDATE_FRAMES = 5  # update at 20 Hz; the integrator steps assume this
@@ -34,9 +35,11 @@ URGENT_JERK_LOWER = 5.0  # m/s^3, what openpilot sends without the tuning
 
 
 def stinger_long_tuning_mode(car_fingerprint, openpilot_longitudinal: bool, testing_ground) -> int:
-  """Mode from the Galaxy Testing Ground slot (A off, B dynamic, C predictive); Stinger 2022 with openpilot long only."""
+  """Mode from the Galaxy Testing Ground slot (A off, B dynamic, C predictive, D stock-like); Stinger 2022 with openpilot long only."""
   if car_fingerprint != CAR.KIA_STINGER_2022 or not openpilot_longitudinal:
     return LongitudinalTuningMode.OFF
+  if testing_ground.use(STINGER_LONG_TUNING_TESTING_GROUND_ID, "D"):
+    return LongitudinalTuningMode.STOCK_LIKE
   if testing_ground.use(STINGER_LONG_TUNING_TESTING_GROUND_ID, "C"):
     return LongitudinalTuningMode.PREDICTIVE
   if testing_ground.use(STINGER_LONG_TUNING_TESTING_GROUND_ID, "B"):

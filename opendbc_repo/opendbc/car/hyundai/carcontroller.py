@@ -11,8 +11,8 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.lead_data import CanLeadDataState
-from opendbc.car.hyundai.longitudinal_tuning import UPDATE_FRAMES as LONG_TUNING_UPDATE_FRAMES, LongitudinalTuner, \
-                                                    stinger_long_tuning_mode
+from opendbc.car.hyundai.longitudinal_tuning import UPDATE_FRAMES as LONG_TUNING_UPDATE_FRAMES, URGENT_ACCEL, URGENT_JERK_LOWER, \
+                                                    LongitudinalTuner, LongitudinalTuningMode, stinger_long_tuning_mode
 from opendbc.car.hyundai.values import HyundaiFlags, HyundaiSafetyFlags, HyundaiStarPilotFlags, Buttons, CarControllerParams, CAR, CANFD_ANGLE_LONGITUDINAL_CAR, \
                                         CANFD_RADAR_ECU_KEEPALIVE_CAR, CANFD_ALT_BUTTONS_RESUME_CAR, kia_ev6_gt_line_longitudinal_tuning, \
                                         KIA_EV6_GT_LINE_LONG_TUNING_TESTING_GROUND_ID
@@ -55,6 +55,25 @@ RAY_PEDAL_RATE_UP = 0.02
 RAY_PEDAL_RATE_DOWN = 0.06
 RAY_PEDAL_OVERSPEED_CUTOFF = 0.5
 RAY_PEDAL_TAPER_BELOW_TARGET = 0.75
+
+# Kia Stinger 2022 stock-like longitudinal tune, measured from factory SCC (Testing Ground slot 9, variant D)
+KIA_STINGER_2022_JERK_UPPER_SPEED_BP = [0.0, 1.0, 3.0]
+KIA_STINGER_2022_JERK_UPPER_V = [1.0, 0.7, 0.5]
+KIA_STINGER_2022_JERK_LOWER_NEAR = 2.5  # lead closer than NEAR_LEAD_DISTANCE, or openpilot braking harder than BRAKE_ACCEL_NEAR
+KIA_STINGER_2022_JERK_LOWER_FAR = 0.5  # no lead, lead beyond FAR_LEAD_DISTANCE, and accel above BRAKE_ACCEL_FAR
+KIA_STINGER_2022_NEAR_LEAD_DISTANCE = 60.0  # m
+KIA_STINGER_2022_FAR_LEAD_DISTANCE = 90.0  # m
+KIA_STINGER_2022_BRAKE_ACCEL_NEAR = -0.5  # m/s^2, stock never brakes without a lead but openpilot does (curves, limits, stops)
+KIA_STINGER_2022_BRAKE_ACCEL_FAR = -0.3  # m/s^2
+KIA_STINGER_2022_URGENT_ACCEL = URGENT_ACCEL  # at or below this: no ramp, full lower jerk
+KIA_STINGER_2022_URGENT_JERK_LOWER = URGENT_JERK_LOWER
+KIA_STINGER_2022_PASSTHROUGH_JERK_UPPER_PID = 3.0  # what openpilot sends without the tune
+KIA_STINGER_2022_PASSTHROUGH_JERK_UPPER = 1.0
+KIA_STINGER_2022_PASSTHROUGH_JERK_LOWER = 5.0
+KIA_STINGER_2022_COMFORT_BAND_UPPER_ACCEL_BP = [0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.1]
+KIA_STINGER_2022_COMFORT_BAND_UPPER_V = [0.0, 0.005, 0.040, 0.068, 0.073, 0.055, 0.070]
+KIA_STINGER_2022_COMFORT_BAND_LOWER_ACCEL_BP = [-1.1, -0.9, -0.7, -0.5, -0.3, -0.1, 0.1, 0.2]
+KIA_STINGER_2022_COMFORT_BAND_LOWER_V = [0.080, 0.099, 0.082, 0.074, 0.063, 0.036, 0.009, 0.0]
 GENESIS_G90_STOP_HOLD_SPEED_BP = [0.0, 0.03, 0.08, 0.16, 0.3, 0.5, 0.8, 1.2, 2.0, 3.0]
 GENESIS_G90_STOP_HOLD_ACCEL_V = [-0.10, -0.10, -0.12, -0.18, -0.30, -0.50, -0.75, -1.00, -1.40, -1.80]
 GENESIS_G90_STOP_HOLD_RELAX_SPEED_BP = [0.0, 0.08, 0.16, 0.3, 0.5, 0.8, 1.2, 2.0, 3.0]
@@ -163,6 +182,17 @@ class GenesisG90LongitudinalTuningState:
   actual_accel: float = 0.0
   release_active: bool = False
   long_control_state_last: LongCtrlState = LongCtrlState.off
+
+
+@dataclass
+class KiaStingerLongitudinalTuningState:
+  accel_last: float = 0.0
+  desired_accel: float = 0.0
+  actual_accel: float = 0.0
+  jerk_upper: float = 0.0
+  jerk_lower: float = 0.0
+  comfort_band_upper: float = 0.0
+  comfort_band_lower: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -399,6 +429,44 @@ def update_genesis_g90_longitudinal_tuning(state: GenesisG90LongitudinalTuningSt
   return state
 
 
+def update_kia_stinger_longitudinal_tuning(state: KiaStingerLongitudinalTuningState, accel_cmd: float, v_ego: float,
+                                           long_control_state: LongCtrlState, long_active: bool, gas_override: bool,
+                                           lead_visible: bool, lead_distance: float) -> KiaStingerLongitudinalTuningState:
+  # Called every control frame (100 Hz)
+  state.desired_accel = float(np.clip(accel_cmd, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
+
+  if not long_active or gas_override or long_control_state not in (LongCtrlState.pid, LongCtrlState.starting):
+    # Same values openpilot sends without the tune; stopping behavior is left untouched
+    state.desired_accel = state.actual_accel = state.accel_last = accel_cmd
+    state.jerk_upper = KIA_STINGER_2022_PASSTHROUGH_JERK_UPPER_PID if long_control_state == LongCtrlState.pid \
+      else KIA_STINGER_2022_PASSTHROUGH_JERK_UPPER
+    state.jerk_lower = KIA_STINGER_2022_PASSTHROUGH_JERK_LOWER
+    state.comfort_band_upper = state.comfort_band_lower = 0.0
+    return state
+
+  state.jerk_upper = float(np.interp(v_ego, KIA_STINGER_2022_JERK_UPPER_SPEED_BP, KIA_STINGER_2022_JERK_UPPER_V))
+  lead_jerk = float(np.interp(lead_distance, [KIA_STINGER_2022_NEAR_LEAD_DISTANCE, KIA_STINGER_2022_FAR_LEAD_DISTANCE],
+                              [KIA_STINGER_2022_JERK_LOWER_NEAR, KIA_STINGER_2022_JERK_LOWER_FAR])) if lead_visible \
+    else KIA_STINGER_2022_JERK_LOWER_FAR
+  accel_jerk = float(np.interp(accel_cmd, [KIA_STINGER_2022_BRAKE_ACCEL_NEAR, KIA_STINGER_2022_BRAKE_ACCEL_FAR],
+                               [KIA_STINGER_2022_JERK_LOWER_NEAR, KIA_STINGER_2022_JERK_LOWER_FAR]))
+  state.jerk_lower = max(lead_jerk, accel_jerk)
+
+  if accel_cmd <= KIA_STINGER_2022_URGENT_ACCEL:
+    state.jerk_lower = KIA_STINGER_2022_URGENT_JERK_LOWER
+    state.actual_accel = accel_cmd
+  else:
+    step = (state.jerk_upper if accel_cmd >= state.accel_last else state.jerk_lower) * DT_CTRL
+    state.actual_accel = float(np.clip(accel_cmd, state.accel_last - step, state.accel_last + step))
+  state.accel_last = state.actual_accel
+
+  state.comfort_band_upper = float(np.interp(state.actual_accel, KIA_STINGER_2022_COMFORT_BAND_UPPER_ACCEL_BP,
+                                             KIA_STINGER_2022_COMFORT_BAND_UPPER_V))
+  state.comfort_band_lower = float(np.interp(state.actual_accel, KIA_STINGER_2022_COMFORT_BAND_LOWER_ACCEL_BP,
+                                             KIA_STINGER_2022_COMFORT_BAND_LOWER_V))
+  return state
+
+
 def get_baseline_safety_cp():
   from opendbc.car.hyundai.interface import CarInterface
   return CarInterface.get_non_essential_params(ANGLE_SAFETY_BASELINE_MODEL)
@@ -504,6 +572,8 @@ class CarController(CarControllerBase):
     self._long_tuner = LongitudinalTuner(stinger_long_tuning_mode(CP.carFingerprint, CP.openpilotLongitudinalControl, testing_ground),
                                          radar_available=not CP.radarUnavailable)
     self._genesis_g90_long_tuning = GenesisG90LongitudinalTuningState()
+    self._stinger_stock_like = self._long_tuner.mode == LongitudinalTuningMode.STOCK_LIKE
+    self._stinger_long_tuning = KiaStingerLongitudinalTuningState()
     self._can_lead_data = CanLeadDataState()
     self._dash_lat_disengage_blink_frame = 0
     self._dash_lat_disengage_init = False
@@ -755,6 +825,13 @@ class CarController(CarControllerBase):
       accel = self._long_tuner.actual_accel
       stopping = self._long_tuner.stopping
 
+    if self._stinger_stock_like and self.long_active_ecu:
+      lead_visible, lead_distance, _ = self._get_openpilot_lead(CS, hud_control)
+      self._stinger_long_tuning = update_kia_stinger_longitudinal_tuning(self._stinger_long_tuning, accel_cmd, CS.out.vEgo,
+                                                                         actuators.longControlState, bool(CC.longActive),
+                                                                         bool(CC.cruiseControl.override), lead_visible, lead_distance)
+      accel = self._stinger_long_tuning.actual_accel
+
     # *** common hyundai stuff ***
 
     # tester present - w/ no response (keeps relevant ECU disabled)
@@ -792,17 +869,22 @@ class CarController(CarControllerBase):
     self.frame += 1
     return new_actuators, can_sends
 
-  def create_can_msgs(self, apply_steer_req, apply_torque, torque_fault, set_speed_in_units, accel, stopping, hud_control, actuators, CS, CC, lka_icon, lfa_icon):
-    can_sends = []
-    can_canfd_blended = bool(self.CP.flags & HyundaiFlags.CAN_CANFD_BLENDED)
-    blended_hda2 = can_canfd_blended and bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING)
-    longitudinal_active = bool(self.long_active_ecu and getattr(CC, "longActive", False))
+  @staticmethod
+  def _get_openpilot_lead(CS, hud_control):
     lead_visible = bool(getattr(CS, "openpilot_lead_visible", False) or getattr(hud_control, "leadVisible", False))
     lead_distance = float(np.clip(getattr(CS, "openpilot_lead_distance", 0.0), 0.0, 204.7))
     lead_rel_speed = float(np.clip(getattr(CS, "openpilot_lead_rel_speed", 0.0), -170.0, 239.5))
     if lead_visible and lead_distance <= CANFD_LEAD_MIN_DISTANCE:
       lead_distance = CANFD_FALLBACK_LEAD_DISTANCE
       lead_rel_speed = 0.0
+    return lead_visible, lead_distance, lead_rel_speed
+
+  def create_can_msgs(self, apply_steer_req, apply_torque, torque_fault, set_speed_in_units, accel, stopping, hud_control, actuators, CS, CC, lka_icon, lfa_icon):
+    can_sends = []
+    can_canfd_blended = bool(self.CP.flags & HyundaiFlags.CAN_CANFD_BLENDED)
+    blended_hda2 = can_canfd_blended and bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING)
+    longitudinal_active = bool(self.long_active_ecu and getattr(CC, "longActive", False))
+    lead_visible, lead_distance, lead_rel_speed = self._get_openpilot_lead(CS, hud_control)
     lead_data = self._can_lead_data.update(lead_distance, lead_rel_speed, lead_visible)
 
     # HUD messages
@@ -904,7 +986,7 @@ class CarController(CarControllerBase):
                                                                           set_speed_in_units, stopping,
                                                                           CC.cruiseControl.override, use_fca, self.CP))
       else:
-        tuning = self._long_tuner if self._long_tuner.enabled else None
+        tuning = self._long_tuner if self._long_tuner.enabled else self._stinger_long_tuning if self._stinger_stock_like else None
         can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, jerk, int(self.frame / 2),
                                                         hud_control, set_speed_in_units, stopping,
                                                         CC.cruiseControl.override, use_fca, self.CP,

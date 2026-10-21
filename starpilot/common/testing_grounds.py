@@ -98,6 +98,7 @@ TESTING_GROUNDS_SLOT_DEFINITIONS = (
     "aLabel": "A - Off (installed tune)",
     "bLabel": "B - Dynamic",
     "cLabel": "C - Predictive",
+    "dLabel": "D - Stock-like",
   },
 )
 
