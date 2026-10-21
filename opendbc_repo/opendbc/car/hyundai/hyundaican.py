@@ -318,7 +318,7 @@ def create_acc_commands_can_canfd_blended_hda2(packer, enabled, accel, accel_las
 
 
 def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, set_speed, stopping, long_override, use_fca, CP,
-                        main_cruise_enabled=True, lead_data: CanLeadData | None = None):
+                        main_cruise_enabled=True, lead_data: CanLeadData | None = None, lower_jerk=5.0):
   commands = []
   lead_data = lead_data or CanLeadData()
 
@@ -357,7 +357,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "ComfortBandUpper": 0.0, # stock usually is 0 but sometimes uses higher values
     "ComfortBandLower": 0.0, # stock usually is 0 but sometimes uses higher values
     "JerkUpperLimit": upper_jerk, # stock usually is 1.0 but sometimes uses higher values
-    "JerkLowerLimit": 5.0, # stock usually is 0.5 but sometimes uses higher values
+    "JerkLowerLimit": lower_jerk, # stock usually is 0.5 but sometimes uses higher values
     "ACCMode": 2 if enabled and long_override else 1 if enabled else 4, # stock will always be 4 instead of 0 after first disengage
     "ObjGap": lead_data.object_gap, # 5: >30 m, 4: 25-30 m, 3: 20-25 m, 2: <20 m, 0: no lead
     "ObjDistStat": lead_data.object_rel_gap,

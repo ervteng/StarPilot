@@ -14,6 +14,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import (
   shape_hyundai_canfd_scc_accel,
 )
 import openpilot.starpilot.controls.starpilot_planner as starpilot_planner_module
+import openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes as vehicle_tunes
 
 
 class DummyThemeManager:
@@ -86,6 +87,19 @@ def test_genesis_gv70_scc_accel_preserves_urgent_braking_and_resets():
   assert shape_hyundai_canfd_scc_accel(gv70, False, False, False, 1.0, 0.5) == 0.0
   assert shape_hyundai_canfd_scc_accel(gv70, True, True, False, 1.0, 0.5) == 0.0
   assert shape_hyundai_canfd_scc_accel(other, True, False, False, 1.0, 0.0) == 1.0
+
+
+@pytest.mark.parametrize("variant, scale, rates", (("A", 1.0, (0.0, 0.0)), ("B", 1.25, (2.0, 1.25)), ("C", 1.25, (2.0, 1.25))))
+def test_kia_stinger_2022_planner_entries_only_for_stock_like_variants(monkeypatch, variant, scale, rates):
+  stinger = SimpleNamespace(brand="hyundai", carFingerprint="KIA_STINGER_2022", openpilotLongitudinalControl=True)
+  other = SimpleNamespace(brand="hyundai", carFingerprint="KIA_STINGER", openpilotLongitudinalControl=True)
+  monkeypatch.setattr(vehicle_tunes, "testing_ground", SimpleNamespace(use=lambda slot, v="B": slot == "9" and v == variant))
+  monkeypatch.setattr(vehicle_tunes, "_kia_stinger_2022_tune_latch", {})
+
+  assert get_lead_follow_jerk_scale(stinger) == scale
+  assert vehicle_tunes.get_far_follow_output_slew_rates(stinger) == rates
+  assert get_lead_follow_jerk_scale(other) == 1.0
+  assert vehicle_tunes.get_far_follow_output_slew_rates(other) == (0.0, 0.0)
 
 
 def make_sm(planner, *, frame: int, v_ego: float, left_blinker: bool, right_blinker: bool = False, standstill: bool = False):

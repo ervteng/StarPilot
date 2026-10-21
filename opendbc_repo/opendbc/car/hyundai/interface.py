@@ -16,13 +16,16 @@ from opendbc.car.hyundai.values import HyundaiFlags, CAR, CarControllerParams, \
                                                    HyundaiStarPilotSafetyFlags, \
                                                    hyundai_cancel_button_enables_cruise, \
                                                    kia_ev6_gt_line_longitudinal_tuning, \
-                                                   KIA_EV6_GT_LINE_LONG_TUNING_TESTING_GROUND_ID
+                                                   KIA_EV6_GT_LINE_LONG_TUNING_TESTING_GROUND_ID, \
+                                                   kia_stinger_2022_longitudinal_tuning, \
+                                                   KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID
 from opendbc.car.hyundai.radar_interface import get_radar_track_config, radar_tracks_available
 from opendbc.car.interfaces import CarInterfaceBase, ACCEL_MIN
 from opendbc.car.disable_ecu import disable_ecu, ecu_log
 from opendbc.car.hyundai.carcontroller import CarController
 from opendbc.car.hyundai.carstate import CarState
 from opendbc.car.hyundai.radar_interface import RadarInterface
+from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import KIA_STINGER_2022_ACTUATOR_DELAY
 from openpilot.starpilot.common.testing_grounds import testing_ground
 
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -63,6 +66,10 @@ def apply_kia_ev6_gt_line_longitudinal_params(ret: structs.CarParams) -> None:
   ret.startAccel = 1.4
   ret.longitudinalActuatorDelay = 0.5
   ret.vEgoStarting = 0.5
+
+
+def apply_kia_stinger_2022_longitudinal_params(ret: structs.CarParams) -> None:
+  ret.longitudinalActuatorDelay = KIA_STINGER_2022_ACTUATOR_DELAY
 
 
 def apply_kia_ev9_longitudinal_params(ret: structs.CarParams) -> None:
@@ -124,6 +131,12 @@ class CarInterface(CarInterfaceBase):
     gt_line_testing_ground = testing_ground.use(KIA_EV6_GT_LINE_LONG_TUNING_TESTING_GROUND_ID)
     if kia_ev6_gt_line_longitudinal_tuning(CP.carFingerprint, CP.carVin, gt_line_testing_ground):
       apply_kia_ev6_gt_line_longitudinal_params(CP)
+    if CP.carFingerprint == CAR.KIA_STINGER_2022 and kia_stinger_2022_longitudinal_tuning(
+      CP.carFingerprint, CP.openpilotLongitudinalControl,
+      testing_ground.use(KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID, "B"),
+      testing_ground.use(KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID, "C"),
+    ):
+      apply_kia_stinger_2022_longitudinal_params(CP)
 
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
