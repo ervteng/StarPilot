@@ -318,7 +318,7 @@ def create_acc_commands_can_canfd_blended_hda2(packer, enabled, accel, accel_las
 
 
 def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, set_speed, stopping, long_override, use_fca, CP,
-                        main_cruise_enabled=True, lead_data: CanLeadData | None = None, tuning=None):
+                        main_cruise_enabled=True, lead_data: CanLeadData | None = None):
   commands = []
   lead_data = lead_data or CanLeadData()
 
@@ -338,7 +338,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   scc12_values = {
     "ACCMode": 2 if enabled and long_override else 1 if enabled else 0,
     "StopReq": 1 if stopping else 0,
-    "aReqRaw": tuning.desired_accel if tuning else accel,
+    "aReqRaw": accel,
     "aReqValue": accel,  # stock ramps up and down respecting jerk limit until it reaches aReqRaw
     "CR_VSM_Alive": idx % 0xF,
   }
@@ -354,10 +354,10 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   commands.append(packer.make_can_msg("SCC12", 0, scc12_values))
 
   scc14_values = {
-    "ComfortBandUpper": tuning.comfort_band_upper if tuning else 0.0, # stock usually is 0 but sometimes uses higher values
-    "ComfortBandLower": tuning.comfort_band_lower if tuning else 0.0, # stock usually is 0 but sometimes uses higher values
-    "JerkUpperLimit": tuning.jerk_upper if tuning else upper_jerk, # stock usually is 1.0 but sometimes uses higher values
-    "JerkLowerLimit": tuning.jerk_lower if tuning else 5.0, # stock usually is 0.5 but sometimes uses higher values
+    "ComfortBandUpper": 0.0, # stock usually is 0 but sometimes uses higher values
+    "ComfortBandLower": 0.0, # stock usually is 0 but sometimes uses higher values
+    "JerkUpperLimit": upper_jerk, # stock usually is 1.0 but sometimes uses higher values
+    "JerkLowerLimit": 5.0, # stock usually is 0.5 but sometimes uses higher values
     "ACCMode": 2 if enabled and long_override else 1 if enabled else 4, # stock will always be 4 instead of 0 after first disengage
     "ObjGap": lead_data.object_gap, # 5: >30 m, 4: 25-30 m, 3: 20-25 m, 2: <20 m, 0: no lead
     "ObjDistStat": lead_data.object_rel_gap,

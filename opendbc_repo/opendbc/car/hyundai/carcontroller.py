@@ -11,8 +11,6 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.lead_data import CanLeadDataState
-from opendbc.car.hyundai.longitudinal_tuning import UPDATE_FRAMES as LONG_TUNING_UPDATE_FRAMES, LongitudinalTuner, \
-                                                    stinger_long_tuning_mode
 from opendbc.car.hyundai.values import HyundaiFlags, HyundaiSafetyFlags, HyundaiStarPilotFlags, Buttons, CarControllerParams, CAR, CANFD_ANGLE_LONGITUDINAL_CAR, \
                                         CANFD_RADAR_ECU_KEEPALIVE_CAR, CANFD_ALT_BUTTONS_RESUME_CAR, kia_ev6_gt_line_longitudinal_tuning, \
                                         KIA_EV6_GT_LINE_LONG_TUNING_TESTING_GROUND_ID
@@ -500,9 +498,6 @@ class CarController(CarControllerBase):
     self._ioniq_6_lane_change_ui_side = None
     self._ioniq_6_lane_change_ui_frames = 0
     self._ioniq_6_long_tuning = Ioniq6LongitudinalTuningState()
-    # Read once at startup with the actuator delay in CarInterface, so the mode can't change mid-drive
-    self._long_tuner = LongitudinalTuner(stinger_long_tuning_mode(CP.carFingerprint, CP.openpilotLongitudinalControl, testing_ground),
-                                         radar_available=not CP.radarUnavailable)
     self._genesis_g90_long_tuning = GenesisG90LongitudinalTuningState()
     self._can_lead_data = CanLeadDataState()
     self._dash_lat_disengage_blink_frame = 0
@@ -749,12 +744,6 @@ class CarController(CarControllerBase):
                                                                               self.long_active_ecu)
       accel = self._genesis_g90_long_tuning.actual_accel
 
-    if self._long_tuner.enabled and self.long_active_ecu:
-      if self.frame % LONG_TUNING_UPDATE_FRAMES == 0:
-        self._long_tuner.update(CC, CS.out.vEgo, CS.out.aEgo)
-      accel = self._long_tuner.actual_accel
-      stopping = self._long_tuner.stopping
-
     # *** common hyundai stuff ***
 
     # tester present - w/ no response (keeps relevant ECU disabled)
@@ -904,11 +893,10 @@ class CarController(CarControllerBase):
                                                                           set_speed_in_units, stopping,
                                                                           CC.cruiseControl.override, use_fca, self.CP))
       else:
-        tuning = self._long_tuner if self._long_tuner.enabled else None
         can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, jerk, int(self.frame / 2),
                                                         hud_control, set_speed_in_units, stopping,
                                                         CC.cruiseControl.override, use_fca, self.CP,
-                                                        main_cruise_enabled, lead_data, tuning))
+                                                        main_cruise_enabled, lead_data))
 
     # 20 Hz LFA MFA message
     if self.frame % 5 == 0 and (self.CP.flags & HyundaiFlags.SEND_LFA.value or (self.long_active_ecu and blended_hda2)):
