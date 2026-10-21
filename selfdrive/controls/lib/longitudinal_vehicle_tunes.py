@@ -31,7 +31,7 @@ GENESIS_GV70_ELECTRIFIED_SCC_JERK_LOWER = 2.0
 GENESIS_GV70_ELECTRIFIED_SCC_URGENT_JERK_LOWER = 5.0
 GENESIS_GV70_ELECTRIFIED_SCC_URGENT_ACCEL = -1.0
 HYUNDAI_CANFD_SCC_FREQUENCY = 50.0
-# Kia Stinger 2022 stock-like tunes (Testing Ground slot 9, variants B and C). They shape the braking side only. Bases:
+# Kia Stinger 2022 stock-like tune (Testing Ground slot 9, variant B; variant C is the Ioniq 6 tune). It shapes the braking side only. Bases:
 # analysis/stock_mimic_check.py on 4 factory-ACC drives (262k active samples) unless noted.
 # command -> aEgo lag of the sent accel, 890 s of openpilot-long drives (analysis/accel_lag.py): delay 0.20 + tau 0.30 s
 KIA_STINGER_2022_ACTUATOR_DELAY = 0.5
