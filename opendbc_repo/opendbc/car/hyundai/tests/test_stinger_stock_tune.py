@@ -189,16 +189,17 @@ class TestVariantC:
     assert state.actual_accel == pytest.approx(0.5)
     assert state.accel_last == pytest.approx(0.5)
 
-  def test_lower_jerk_follows_lead(self):
-    def lower(lead_visible, lead_distance, accel=-0.3, **kw):
-      state = Ioniq6LongitudinalTuningState(accel_last=0.0)
-      return update_ioniq_6_longitudinal_tuning(state, accel, 20.0, 0.0, LongCtrlState.pid, True, kia_stinger_2022=True,
-                                                lead_visible=lead_visible, lead_distance=lead_distance, **kw).jerk_lower
-    assert lower(True, 30.0) == 2.5
-    assert lower(True, 80.0) == 0.5
-    assert lower(False, 0.0) == 0.5
-    assert lower(False, 0.0, accel=-0.8) == 2.5
-    assert lower(True, 80.0, accel=-1.5) == 5.0
+  @pytest.mark.parametrize("a_ego, accel_last, accel", ((0.0, 0.0, -0.3), (-0.5, 0.0, -0.8), (-2.0, 0.0, -0.9), (0.3, -0.2, -0.4)))
+  def test_lower_jerk_is_the_dynamic_curve_capped(self, a_ego, accel_last, accel):
+    # same dynamic lower jerk (a_ego - accel_last, speed limit) as the EV6 / Ioniq, capped at 2.5, no lead term
+    def run(stinger):
+      return self.run_update(accel, a_ego=a_ego, state=Ioniq6LongitudinalTuningState(accel_last=accel_last), stinger=stinger)
+    assert run(True).jerk_lower == pytest.approx(min(run(False).jerk_lower, tunes.KIA_STINGER_2022_SCC_JERK_LOWER))
+
+  def test_lower_jerk_has_no_floor_or_lead_term(self):
+    # B's -0.5 braking floor does not apply: a gentle dynamic value stays below 2.5
+    state = self.run_update(-0.8, a_ego=0.0, state=Ioniq6LongitudinalTuningState(accel_last=-0.8))
+    assert state.jerk_lower < 2.5
 
   def test_lower_jerk_capped(self):
     state = self.run_update(-0.9, a_ego=-2.0, state=Ioniq6LongitudinalTuningState(accel_last=0.0))

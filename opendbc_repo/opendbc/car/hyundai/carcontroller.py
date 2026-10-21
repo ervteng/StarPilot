@@ -20,7 +20,7 @@ from opendbc.car.vehicle_model import VehicleModel
 from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import KIA_STINGER_2022_SCC_JERK_LOWER, KIA_STINGER_2022_SCC_JERK_UPPER, \
                                                                         KIA_STINGER_2022_SCC_URGENT_ACCEL, KIA_STINGER_2022_SCC_URGENT_JERK_LOWER, \
-                                                                        get_hyundai_canfd_scc_jerk_limits, get_kia_stinger_2022_scc_jerk_lower, \
+                                                                        get_hyundai_canfd_scc_jerk_limits, \
                                                                         shape_hyundai_canfd_scc_accel
 from openpilot.starpilot.common.testing_grounds import testing_ground
 
@@ -298,8 +298,7 @@ def reset_egmp_longitudinal_tuning(state: Ioniq6LongitudinalTuningState) -> Ioni
 def update_ioniq_6_longitudinal_tuning(state: Ioniq6LongitudinalTuningState, accel_cmd: float, v_ego: float, a_ego: float,
                                        long_control_state: LongCtrlState, long_active: bool,
                                        ev6_gt_line: bool = False, low_speed_stop_brake_cap: bool = False,
-                                       ev9: bool = False, kia_stinger_2022: bool = False,
-                                       lead_visible: bool | None = None, lead_distance: float | None = None) -> Ioniq6LongitudinalTuningState:
+                                       ev9: bool = False, kia_stinger_2022: bool = False) -> Ioniq6LongitudinalTuningState:
   starting = long_control_state == LongCtrlState.starting
   stopping = long_control_state == LongCtrlState.stopping
   restart_from_stop = state.long_control_state_last in (LongCtrlState.stopping, LongCtrlState.starting) and \
@@ -343,17 +342,14 @@ def update_ioniq_6_longitudinal_tuning(state: Ioniq6LongitudinalTuningState, acc
     state.jerk_lower = min(state.jerk_lower, EV9_LONG_DECEL_JERK)
 
   # Stock-like Stinger shapes the braking side only: rising accel passes through (SCC14 upper jerk as today), the lower
-  # jerk follows the factory (capped dynamic curve, or the lead-based factory rule when the lead is given), and the EV
-  # launch hold, stop brake cap and stop-hold / stop-release jerk tweaks are skipped so openpilot's stopping command
-  # passes through like on the installed tune.
+  # jerk is the EV6/Ioniq dynamic lower jerk (a_ego vs accel_last, speed limit) capped at the stock non-urgent braking
+  # jerk with a lead (2.5; urgent / stopping 5.0), and the EV launch hold, stop brake cap and stop-hold / stop-release
+  # jerk tweaks are skipped so openpilot's stopping command passes through like on the installed tune.
   stinger_urgent = kia_stinger_2022 and accel_cmd <= KIA_STINGER_2022_SCC_URGENT_ACCEL
   if kia_stinger_2022:
     state.jerk_upper = KIA_STINGER_2022_SCC_JERK_UPPER if long_control_state == LongCtrlState.pid else 1.0
-    if lead_visible is not None:
-      state.jerk_lower = get_kia_stinger_2022_scc_jerk_lower(state.stopping, accel_cmd, lead_visible, lead_distance)
-    else:
-      state.jerk_lower = KIA_STINGER_2022_SCC_URGENT_JERK_LOWER if stinger_urgent or state.stopping else \
-        min(state.jerk_lower, KIA_STINGER_2022_SCC_JERK_LOWER)
+    state.jerk_lower = KIA_STINGER_2022_SCC_URGENT_JERK_LOWER if stinger_urgent or state.stopping else \
+      min(state.jerk_lower, KIA_STINGER_2022_SCC_JERK_LOWER)
 
   if state.stopping and not kia_stinger_2022:
     stop_brake_cap_max_speed = EV6_GT_LINE_STOP_BRAKE_CAP_MAX_SPEED if ev6_gt_line or low_speed_stop_brake_cap else \
@@ -732,17 +728,13 @@ class CarController(CarControllerBase):
       self._ioniq_6_long_tuning = reset_ev6_gt_line_longitudinal_tuning(self._ioniq_6_long_tuning, self.CP,
                                                                          actuators.longControlState)
     elif use_egmp_dynamic_long_tuning and self.frame % 5 == 0:
-      stinger_lead = {}
-      if is_stinger_2022_c:
-        stinger_lead = {"lead_visible": bool(getattr(CS, "openpilot_lead_visible", False) or CC.hudControl.leadVisible),
-                        "lead_distance": float(np.clip(getattr(CS, "openpilot_lead_distance", 0.0), 0.0, 204.7))}
       self._ioniq_6_long_tuning = update_ioniq_6_longitudinal_tuning(self._ioniq_6_long_tuning, accel_cmd,
                                                                       CS.out.vEgo, CS.out.aEgo,
                                                                       actuators.longControlState, self.long_active_ecu,
                                                                       ev6_gt_line=is_ev6_gt_line,
                                                                       low_speed_stop_brake_cap=is_ccnc_angle_long,
                                                                       ev9=self.CP.carFingerprint == CAR.KIA_EV9,
-                                                                      kia_stinger_2022=is_stinger_2022_c, **stinger_lead)
+                                                                      kia_stinger_2022=is_stinger_2022_c)
     if is_stinger_2022_c:
       # Braking side only: rising accel and urgent braking pass through, other braking is smoothed.
       use_egmp_smoothed_accel = use_egmp_dynamic_long_tuning and \
