@@ -28,7 +28,7 @@ from opendbc.car.hyundai import hyundaican, hyundaicanfd
 from opendbc.car.hyundai.hyundaicanfd import CanBus, hkg_can_fd_checksum
 from opendbc.car.hyundai.lead_data import CanLeadData, CanLeadDataState
 from opendbc.car.hyundai.radar_interface import MRREVO14F_RADAR_START_ADDR, MRR30_RADAR_START_ADDR, MRR35_RADAR_START_ADDR, \
-                                             RADAR_START_ADDR, RadarInterface, decode_stinger_2022_triplet, \
+                                             RADAR_START_ADDR, STINGER_2022_EGO_SPEED_OFFSET, RadarInterface, decode_stinger_2022_triplet, \
                                              get_radar_track_config, radar_tracks_available
 from opendbc.car.hyundai.values import CAMERA_SCC_CAR, CANFD_CAR, CAN_GEARS, CAR, CHECKSUM, DATE_FW_ECUS, DATELESS_FUZZY_CARS, \
                                          HYBRID_CAR, EV_CAR, FW_QUERY_CONFIG, LEGACY_SAFETY_MODE_CAR, CANFD_FUZZY_WHITELIST, \
@@ -676,9 +676,9 @@ class TestHyundaiFingerprint:
     assert pt.dRel == pytest.approx(10.85)
     # yRel is left-positive in car frame (-lateral_raw = -(-0.2) = +0.2)
     assert pt.yRel == pytest.approx(0.2)
-    # vRel = absolute_speed (5.15) - v_ego (50 * 1000 / 3600 = 13.888889) = -8.738889
+    # vRel = absolute_speed (5.15) - radar ego speed (50 km/h = 13.888889 m/s, less the ego speed offset)
     v_ego = 50.0 * (1000.0 / 3600.0)
-    assert pt.vRel == pytest.approx(5.15 - v_ego)
+    assert pt.vRel == pytest.approx(5.15 - (v_ego - STINGER_2022_EGO_SPEED_OFFSET))
 
     # Next cycle without radar packets drops track immediately (matching all other Hyundai radars)
     radar_data2 = radar.update([(1_050_000_000, [(0x255, bytes(8), 1)])])
@@ -1530,7 +1530,17 @@ class TestHyundaiFingerprint:
     obj = self.stinger_triplet(absolute_speed, lateral)
     assert obj.absolute_speed == pytest.approx(absolute_speed)
     assert obj.settled_absolute_speed() == pytest.approx(settled)
-    assert obj.relative_speed(5.0) == pytest.approx(settled - 5.0)
+    assert obj.relative_speed(5.0) == pytest.approx(settled - (5.0 - STINGER_2022_EGO_SPEED_OFFSET))
+
+  @pytest.mark.parametrize("ego_speed, offset", [
+    (0.0, 0.0),
+    (0.5, 0.5 * STINGER_2022_EGO_SPEED_OFFSET),
+    (1.0, STINGER_2022_EGO_SPEED_OFFSET),
+    (30.0, STINGER_2022_EGO_SPEED_OFFSET),
+  ])
+  def test_kia_stinger_radar_ego_speed_offset(self, ego_speed, offset):
+    obj = self.stinger_triplet(1.2)
+    assert obj.relative_speed(ego_speed) == pytest.approx(1.2 - ego_speed + offset)
 
   def test_kia_stinger_lfa_button(self):
     toggles = get_test_toggles()
