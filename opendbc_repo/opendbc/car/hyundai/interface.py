@@ -18,6 +18,8 @@ from opendbc.car.hyundai.values import HyundaiFlags, CAR, CarControllerParams, \
                                                    kia_ev6_gt_line_longitudinal_tuning, \
                                                    KIA_EV6_GT_LINE_LONG_TUNING_TESTING_GROUND_ID
 from opendbc.car.hyundai.radar_interface import get_radar_track_config, radar_tracks_available
+from opendbc.car.hyundai.longitudinal_tuning import ACTUATOR_DELAY as LONG_TUNING_ACTUATOR_DELAY, LongitudinalTuningMode, \
+                                                    stinger_long_tuning_mode
 from opendbc.car.interfaces import CarInterfaceBase, ACCEL_MIN
 from opendbc.car.disable_ecu import disable_ecu, ecu_log
 from opendbc.car.hyundai.carcontroller import CarController
@@ -124,6 +126,8 @@ class CarInterface(CarInterfaceBase):
     gt_line_testing_ground = testing_ground.use(KIA_EV6_GT_LINE_LONG_TUNING_TESTING_GROUND_ID)
     if kia_ev6_gt_line_longitudinal_tuning(CP.carFingerprint, CP.carVin, gt_line_testing_ground):
       apply_kia_ev6_gt_line_longitudinal_params(CP)
+    if stinger_long_tuning_mode(CP.carFingerprint, CP.openpilotLongitudinalControl, testing_ground) != LongitudinalTuningMode.OFF:
+      CP.longitudinalActuatorDelay = LONG_TUNING_ACTUATOR_DELAY
 
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
