@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from opendbc.can import CANParser
@@ -9,7 +10,7 @@ from opendbc.car import Bus, gen_empty_fingerprint
 from opendbc.car.structs import CarControl
 from opendbc.car.hyundai import carcontroller as carcontroller_module
 from opendbc.car.hyundai import interface as interface_module
-from opendbc.car.hyundai.carcontroller import CarController, Ioniq6LongitudinalTuningState, update_ioniq_6_longitudinal_tuning
+from opendbc.car.hyundai.carcontroller import CarController, IONIQ_6_CANFD_SCC_ACCEL_STEP, IONIQ_6_CANFD_SCC_DECEL_STEP, Ioniq6LongitudinalTuningState, update_ioniq_6_longitudinal_tuning
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.values import CAR, DBC, KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID, kia_stinger_2022_longitudinal_tuning
 from openpilot.selfdrive.controls.lib import longitudinal_vehicle_tunes as tunes
@@ -175,81 +176,105 @@ class TestVariantB:
     assert tunes.shape_hyundai_canfd_scc_accel(GV70, True, False, False, 1.0, 0.0) == pytest.approx(0.03)
 
 
+class IoniqReference:
+  """What a plain Ioniq 6 does in CarController.update, written out with update_ioniq_6_longitudinal_tuning defaults."""
+
+  def __init__(self):
+    self.state = Ioniq6LongitudinalTuningState()
+    self.accel_last = 0.0  # last accel sent at 100 Hz; the Stinger sends at 50 Hz so the controller's differs
+    self.frame = 0
+
+  def step(self, accel_cmd, long_state, v_ego, a_ego, accel_last):
+    if long_state in (LongCtrlState.starting, LongCtrlState.pid, LongCtrlState.stopping):
+      if self.frame % 5 == 0:
+        self.state = update_ioniq_6_longitudinal_tuning(self.state, accel_cmd, v_ego, a_ego, long_state, True)
+      smoothed = accel_cmd >= self.state.actual_accel or self.state.launch_active or self.state.stopping
+      if not smoothed:
+        accel = float(np.clip(accel_cmd, accel_last - IONIQ_6_CANFD_SCC_DECEL_STEP, accel_last + IONIQ_6_CANFD_SCC_ACCEL_STEP))
+        self.state.desired_accel = accel_cmd
+        self.state.actual_accel = accel
+        self.state.accel_last = accel
+        self.state.jerk_upper = 3.0
+        self.state.jerk_lower = 5.0
+        self.state.launch_active = False
+        self.state.long_control_state_last = long_state
+      else:
+        accel = self.state.actual_accel
+      self.frame += 1
+      return accel, smoothed
+    self.frame += 1
+    return None, False
+
+
 class TestVariantC:
-  def run_update(self, accel_cmd, v_ego=20.0, a_ego=0.0, state=None, long_state=LongCtrlState.pid, stinger=True):
-    state = state or Ioniq6LongitudinalTuningState()
-    return update_ioniq_6_longitudinal_tuning(state, accel_cmd, v_ego, a_ego, long_state, True, kia_stinger_2022=stinger)
+  SEQUENCE = (
+    [(0.0, LongCtrlState.pid, 20.0, 0.0)] * 6 + [(0.7, LongCtrlState.pid, 20.0, 0.0)] * 10 +
+    [(-0.3, LongCtrlState.pid, 20.0, 0.2)] * 10 + [(-0.9, LongCtrlState.pid, 20.0, -0.3)] * 10 +
+    [(-2.5, LongCtrlState.pid, 20.0, -1.0)] * 10 + [(0.2, LongCtrlState.pid, 18.0, -1.5)] * 10 +
+    [(-0.5, LongCtrlState.pid, 6.0, -0.5)] * 10 + [(-0.4, LongCtrlState.stopping, 0.3, -0.3)] * 10 +
+    [(-0.8, LongCtrlState.stopping, 0.1, -0.3)] * 10 + [(0.5, LongCtrlState.starting, 0.1, 0.0)] * 10 +
+    [(0.9, LongCtrlState.pid, 1.0, 0.4)] * 10 + [(-0.1, LongCtrlState.pid, 3.0, 0.5)] * 10 +
+    [(0.0, LongCtrlState.off, 3.0, 0.0)] * 4 + [(-1.2, LongCtrlState.pid, 15.0, 0.0)] * 10
+  )
 
-  @pytest.mark.parametrize("long_state, upper", ((LongCtrlState.pid, 3.0), (LongCtrlState.starting, 1.0)))
-  def test_upper_jerk_is_todays(self, long_state, upper):
-    assert self.run_update(1.0, long_state=long_state).jerk_upper == upper
+  def gate_active(self, monkeypatch, variant, long_state=LongCtrlState.pid, alpha_long=True):
+    select_variant(monkeypatch, variant)
+    h = Harness(alpha_long=alpha_long)
+    h.run(-0.8, 10, state=long_state, v_ego=20.0)
+    return h.controller._ioniq_6_long_tuning != Ioniq6LongitudinalTuningState()
 
-  def test_rising_accel_passes_through(self):
-    state = self.run_update(0.5, state=Ioniq6LongitudinalTuningState(accel_last=-0.8, actual_accel=-0.8))
-    assert state.actual_accel == pytest.approx(0.5)
-    assert state.accel_last == pytest.approx(0.5)
+  def test_gate_on_only_for_c_with_active_long_state(self, monkeypatch):
+    assert self.gate_active(monkeypatch, "C")
+    assert not self.gate_active(monkeypatch, "C", long_state=LongCtrlState.off)
+    assert not self.gate_active(monkeypatch, "A")
+    assert not self.gate_active(monkeypatch, "B")
+    assert not self.gate_active(monkeypatch, "C", alpha_long=False)
 
-  @pytest.mark.parametrize("a_ego, accel_last, accel", ((0.0, 0.0, -0.3), (-0.5, 0.0, -0.8), (-2.0, 0.0, -0.9), (0.3, -0.2, -0.4)))
-  def test_lower_jerk_is_the_dynamic_curve_capped(self, a_ego, accel_last, accel):
-    # same dynamic lower jerk (a_ego - accel_last, speed limit) as the EV6 / Ioniq, capped at 2.5, no lead term
-    def run(stinger):
-      return self.run_update(accel, a_ego=a_ego, state=Ioniq6LongitudinalTuningState(accel_last=accel_last), stinger=stinger)
-    assert run(True).jerk_lower == pytest.approx(min(run(False).jerk_lower, tunes.KIA_STINGER_2022_SCC_JERK_LOWER))
+  def test_matches_plain_ioniq_6(self, monkeypatch):
+    select_variant(monkeypatch, "C")
+    h = Harness()
+    ref = IoniqReference()
+    for accel_cmd, long_state, v_ego, a_ego in self.SEQUENCE:
+      accel_last = h.controller.accel_last
+      actuators, sends = h.step(accel_cmd, state=long_state, v_ego=v_ego, a_ego=a_ego)
+      f32 = lambda x: float(np.float32(x))  # the controller reads accel from a capnp float32
+      ref_accel, smoothed = ref.step(f32(accel_cmd), long_state, v_ego, a_ego, accel_last)
+      assert h.controller._ioniq_6_long_tuning == ref.state
+      if ref_accel is not None:
+        assert actuators.accel == pytest.approx(ref_accel)
+      if any(m[0] == 1057 for m in sends):
+        scc12, scc14 = h.scc(sends)
+        if ref_accel is not None:
+          assert scc12["aReqValue"] == pytest.approx(ref_accel, abs=0.01)
+          upper, lower = (ref.state.jerk_upper, ref.state.jerk_lower) if smoothed else \
+            (3.0 if long_state == LongCtrlState.pid else 1.0, 5.0)
+          assert scc14["JerkUpperLimit"] == pytest.approx(upper, abs=0.1)
+          assert scc14["JerkLowerLimit"] == pytest.approx(lower, abs=0.1)
 
-  def test_lower_jerk_has_no_floor_or_lead_term(self):
-    # B's -0.5 braking floor does not apply: a gentle dynamic value stays below 2.5
-    state = self.run_update(-0.8, a_ego=0.0, state=Ioniq6LongitudinalTuningState(accel_last=-0.8))
-    assert state.jerk_lower < 2.5
+  def test_scc14_carries_state_jerks_while_smoothing(self, monkeypatch):
+    select_variant(monkeypatch, "C")
+    h = Harness()
+    h.run(0.0, 10, v_ego=20.0)
+    seen = set()
+    for _ in range(30):
+      _, sends = h.step(-0.9, v_ego=20.0, a_ego=-0.3)
+      if any(m[0] == 1057 for m in sends):
+        _, scc14 = h.scc(sends)
+        tuning = h.controller._ioniq_6_long_tuning
+        assert scc14["JerkLowerLimit"] == pytest.approx(tuning.jerk_lower, abs=0.1)
+        assert scc14["JerkUpperLimit"] == pytest.approx(tuning.jerk_upper, abs=0.1)
+        seen.add(round(tuning.jerk_lower, 1))
+    assert len(seen) > 1 or seen != {5.0}
 
-  def test_lower_jerk_capped(self):
-    state = self.run_update(-0.9, a_ego=-2.0, state=Ioniq6LongitudinalTuningState(accel_last=0.0))
-    assert state.jerk_lower <= 2.5
-    stock_like = self.run_update(-0.9, a_ego=-2.0, state=Ioniq6LongitudinalTuningState(accel_last=0.0), stinger=False)
-    assert stock_like.jerk_lower > 2.5
-
-  def test_urgent_braking_is_not_smoothed(self):
-    state = self.run_update(-2.0, state=Ioniq6LongitudinalTuningState(accel_last=0.0))
-    assert state.actual_accel == pytest.approx(-2.0)
-    assert state.jerk_lower == 5.0
-
-  def test_non_urgent_braking_is_ramped(self):
-    state = self.run_update(-0.9, state=Ioniq6LongitudinalTuningState(accel_last=0.0))
-    assert -0.9 < state.actual_accel < 0.0
-    assert state.jerk_lower <= 2.5
-
-  def test_ev_specific_pieces_disabled(self):
-    # launch hold would force a positive floor at low speed
-    state = self.run_update(0.1, v_ego=0.2, long_state=LongCtrlState.starting)
-    assert not state.launch_active
-    assert state.desired_accel == pytest.approx(0.1)
-    # stop brake cap would clamp a hard stopping decel at very low speed
-    state = self.run_update(-0.8, v_ego=0.1, long_state=LongCtrlState.stopping)
-    assert state.stopping
-    assert state.desired_accel == pytest.approx(-0.8)
-    # without the flag both are active
-    assert self.run_update(0.1, v_ego=0.2, long_state=LongCtrlState.starting, stinger=False).launch_active
-    assert self.run_update(-0.8, v_ego=0.1, long_state=LongCtrlState.stopping, stinger=False).desired_accel > -0.8
-
-  def test_restart_from_stop_jerk_tweak_disabled(self):
-    def run(stinger):
-      state = Ioniq6LongitudinalTuningState(long_control_state_last=LongCtrlState.stopping)
-      return self.run_update(1.0, v_ego=0.4, state=state, long_state=LongCtrlState.pid, stinger=stinger)
-    # the restart tweak caps jerk_upper to the stop-release curve; the Stinger keeps today's 3.0
-    assert run(True).jerk_upper == pytest.approx(3.0)
-    assert run(False).jerk_upper != pytest.approx(3.0)
-
-  @pytest.mark.parametrize("kwargs", (
-    {"ev6_gt_line": True}, {"low_speed_stop_brake_cap": True}, {"ev9": True}, {},
-  ))
-  @pytest.mark.parametrize("v_ego, a_ego, accel_cmd, long_state", (
-    (0.0, 0.0, 0.8, LongCtrlState.starting), (0.3, 0.1, -0.5, LongCtrlState.stopping),
-    (10.0, -0.5, -1.5, LongCtrlState.pid), (25.0, 0.2, 0.4, LongCtrlState.pid), (1.0, 0.0, -2.5, LongCtrlState.pid),
-  ))
-  def test_other_cars_unchanged_by_new_kwarg(self, kwargs, v_ego, a_ego, accel_cmd, long_state):
-    def run(**extra):
-      state = Ioniq6LongitudinalTuningState(accel_last=-0.3, actual_accel=-0.3)
-      return update_ioniq_6_longitudinal_tuning(state, accel_cmd, v_ego, a_ego, long_state, True, **kwargs, **extra)
-    assert run() == run(kia_stinger_2022=False)
+  def test_ev_pieces_are_the_ioniq_ones(self, monkeypatch):
+    # stop brake cap and launch hold of the Ioniq 6 are active (no ev6_gt_line / ev9 / low-speed cap variants)
+    select_variant(monkeypatch, "C")
+    h = Harness()
+    h.run(-0.8, 10, state=LongCtrlState.stopping, v_ego=0.1)
+    assert h.controller._ioniq_6_long_tuning.stopping
+    ref = update_ioniq_6_longitudinal_tuning(Ioniq6LongitudinalTuningState(), -0.8, 0.1, 0.0, LongCtrlState.stopping, True)
+    assert ref.desired_accel > -0.8  # the Ioniq stop brake cap clamps it
+    assert h.controller._ioniq_6_long_tuning.desired_accel == pytest.approx(ref.desired_accel)
 
 
 class TestCanOutput:
@@ -315,31 +340,6 @@ class TestCanOutput:
     h = Harness()
     out = h.run(-0.3, 4, lead=30.0)
     assert all(o[2] == pytest.approx(2.5) for o in out)
-
-  def test_variant_c_scc_values_and_urgent_pass_through(self, monkeypatch):
-    select_variant(monkeypatch, "C")
-    h = Harness()
-    out = h.run(0.5, 40, v_ego=20.0)
-    assert out[-1][0] == pytest.approx(0.5, abs=0.01)  # rising accel is not ramped
-    assert all(o[1] == pytest.approx(3.0) for o in out)
-    out = h.run(-0.9, 6, v_ego=20.0, lead=30.0)
-    assert out[-1][0] > -0.9  # ramped, not passed through
-    assert all(o[2] <= 2.5 + 1e-6 for o in out)
-    out = h.run(-2.5, 2, v_ego=20.0)
-    assert out[-1][0] == pytest.approx(-2.5, abs=0.01)
-    assert out[-1][2] == pytest.approx(5.0)
-    out = h.run(0.2, 2, v_ego=20.0)  # release after braking passes through too
-    assert out[-1][0] == pytest.approx(0.2, abs=0.01)
-
-  def test_variant_c_resets_when_disengaged(self, monkeypatch):
-    select_variant(monkeypatch, "C")
-    h = Harness()
-    h.run(-0.8, 40, v_ego=20.0)
-    assert h.controller._ioniq_6_long_tuning.accel_last != 0.0
-    h.run(0.0, 2, state=LongCtrlState.off, enabled=False)
-    assert h.controller._ioniq_6_long_tuning.accel_last == 0.0
-    out = h.run(-0.8, 2, v_ego=20.0)
-    assert out[0][0] > -0.2  # braking ramps from the reset state, not from the old -0.8
 
 
 class TestDelayAndPlanner:

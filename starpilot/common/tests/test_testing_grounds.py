@@ -59,11 +59,12 @@ def test_stinger_long_tune_slot_offers_a_b_c(tmp_path, monkeypatch):
   assert tg.TESTING_GROUND_VARIANT_LABELS[tg.TESTING_GROUND_9] == {
     "A": "A - Installed tune",
     "B": "B - Stock-like (GV70 style)",
-    "C": "C - Stock-like (EV6/Ioniq style)",
+    "C": "C - Ioniq 6 tune (as-is)",
   }
   slot = next(s for s in tg.TESTING_GROUNDS_SLOT_DEFINITIONS if s["id"] == tg.TESTING_GROUND_9)
   assert slot["name"] == "Stinger Long Tune"
-  assert "urgent braking is never smoothed" in slot["description"].lower()
+  assert "urgent braking never is" in slot["description"].lower()
+  assert "ioniq 6 tune as-is" in slot["description"].lower()
 
   state_path = tmp_path / "slots.json"
   monkeypatch.setattr(tg, "TESTING_GROUNDS_STATE_PATH", state_path)

@@ -94,11 +94,13 @@ TESTING_GROUNDS_SLOT_DEFINITIONS = (
   {
     "id": TESTING_GROUND_9,
     "name": "Stinger Long Tune",
-    "description": "Kia Stinger 2022 longitudinal tunes that target the factory cruise feel. Urgent braking is never smoothed. "
+    "description": "Kia Stinger 2022 longitudinal tunes. B targets the factory cruise feel (braking is smoothed, urgent braking "
+                   "never is). C is the Ioniq 6 tune as-is: acceleration and braking are smoothed, and urgent braking is not "
+                   "smoothed as on the Ioniq 6 (braking harder than the smoothed value skips smoothing). "
                    "Takes effect the next time the car starts.",
     "aLabel": "A - Installed tune",
     "bLabel": "B - Stock-like (GV70 style)",
-    "cLabel": "C - Stock-like (EV6/Ioniq style)",
+    "cLabel": "C - Ioniq 6 tune (as-is)",
   },
 )
 
