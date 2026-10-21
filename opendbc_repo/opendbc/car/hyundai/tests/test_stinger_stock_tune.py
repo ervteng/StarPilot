@@ -31,16 +31,8 @@ def fake_testing_ground(variant):
 
 def select_variant(monkeypatch, variant):
   tg = fake_testing_ground(variant)
-  for module in (carcontroller_module, interface_module, tunes):
+  for module in (carcontroller_module, interface_module):
     monkeypatch.setattr(module, "testing_ground", tg)
-  tunes._kia_stinger_2022_tune_latch.clear()
-
-
-@pytest.fixture(autouse=True)
-def reset_latch():
-  tunes._kia_stinger_2022_tune_latch.clear()
-  yield
-  tunes._kia_stinger_2022_tune_latch.clear()
 
 
 def make_cp(car=CAR.KIA_STINGER_2022, alpha_long=True):
@@ -116,30 +108,23 @@ class TestGate:
     assert Harness(alpha_long=False).controller._stinger_2022_tune is None
     assert Harness(car=CAR.KIA_STINGER).controller._stinger_2022_tune is None
 
-  def test_planner_gate_latches(self, monkeypatch):
-    select_variant(monkeypatch, "B")
-    assert tunes.get_kia_stinger_2022_stock_tune(STINGER) == "B"
-    select_variant(monkeypatch, "A")
-    tunes._kia_stinger_2022_tune_latch["tune"] = "B"
-    assert tunes.get_kia_stinger_2022_stock_tune(STINGER) == "B"
-
 
 class TestVariantB:
   def jerks(self, **kwargs):
     return tunes.get_hyundai_canfd_scc_jerk_limits(STINGER, kia_stinger_2022_tune=True, **kwargs)
 
   def test_default_limits(self):
-    assert self.jerks() == (tunes.KIA_STINGER_2022_SCC_JERK_UPPER, tunes.KIA_STINGER_2022_SCC_JERK_LOWER)
+    assert self.jerks() == (tunes.KIA_STINGER_2022_SCC_JERK_UPPER, tunes.KIA_STINGER_2022_SCC_JERK_LOWER) == (3.0, 2.5)
 
-  @pytest.mark.parametrize("v_ego, upper", ((0.0, 1.0), (0.5, 0.85), (1.0, 0.7), (2.0, 0.6), (3.0, 0.5), (20.0, 0.5)))
-  def test_upper_jerk_follows_speed(self, v_ego, upper):
-    assert self.jerks(v_ego=v_ego)[0] == pytest.approx(upper)
+  @pytest.mark.parametrize("jerk_upper", (1.0, 3.0))
+  def test_upper_jerk_is_the_callers(self, jerk_upper):
+    assert self.jerks(jerk_upper=jerk_upper)[0] == jerk_upper
 
   @pytest.mark.parametrize("lead_visible, lead_distance, accel, lower", (
     (True, 30.0, 0.0, 2.5),
     (True, 60.0, 0.0, 2.5),
-    (True, 75.0, 0.0, 1.5),
-    (True, 90.0, 0.0, 0.5),
+    (True, 62.5, 0.0, 1.5),
+    (True, 65.0, 0.0, 0.5),
     (True, 150.0, 0.0, 0.5),
     (False, 0.0, 0.3, 0.5),
     (False, 0.0, -0.4, 0.5),
@@ -163,21 +148,31 @@ class TestVariantB:
     assert tunes.get_hyundai_canfd_scc_jerk_limits(GV70) == (1.5, 2.0)
     assert tunes.get_hyundai_canfd_scc_jerk_limits(GV70, True, 0.0) == (1.5, 5.0)
     assert tunes.get_hyundai_canfd_scc_jerk_limits(GV70, False, -1.0) == (1.5, 5.0)
-    assert tunes.get_hyundai_canfd_scc_jerk_limits(GV70, False, 0.0, v_ego=0.0, lead_visible=False, lead_distance=0.0) == (1.5, 2.0)
+    assert tunes.get_hyundai_canfd_scc_jerk_limits(GV70, False, 0.0, jerk_upper=3.0, lead_visible=False, lead_distance=0.0) == (1.5, 2.0)
     assert tunes.get_hyundai_canfd_scc_jerk_limits(GV70, False, 0.0, kia_stinger_2022_tune=True) == (1.5, 2.0)
     assert tunes.shape_hyundai_canfd_scc_accel(GV70, True, False, False, 1.0, 0.0) == pytest.approx(0.03)
     other = SimpleNamespace(brand="hyundai", carFingerprint="HYUNDAI_IONIQ_6")
     assert tunes.get_hyundai_canfd_scc_jerk_limits(other, kia_stinger_2022_tune=True) is None
 
-  def test_shape_rate_matches_50hz_limits(self):
-    kwargs = {"kia_stinger_2022_tune": True, "v_ego": 20.0, "lead_visible": False, "lead_distance": 0.0}
-    accel = tunes.shape_hyundai_canfd_scc_accel(STINGER, True, False, False, 1.0, 0.0, **kwargs)
-    assert accel == pytest.approx(0.5 / 50)
-    accel = tunes.shape_hyundai_canfd_scc_accel(STINGER, True, False, False, -0.3, accel, **kwargs)
-    assert accel == pytest.approx(0.01 - 0.5 / 50)
-    assert tunes.shape_hyundai_canfd_scc_accel(STINGER, True, False, False, -1.5, 0.0, **kwargs) == pytest.approx(-0.1)
+  def test_shape_ramps_braking_only(self):
+    kwargs = {"kia_stinger_2022_tune": True, "jerk_upper": 3.0, "lead_visible": False, "lead_distance": 0.0}
+    shape = lambda accel, last, **kw: tunes.shape_hyundai_canfd_scc_accel(STINGER, True, False, False, accel, last, **{**kwargs, **kw})
+    # rising passes through whatever the step (no upper clip)
+    assert shape(1.0, 0.0) == 1.0
+    assert shape(0.0, -0.8) == 0.0
+    # braking ramps at the 50 Hz lower jerk: 0.5 m/s^3 without a lead, 2.5 with one
+    assert shape(-0.3, 0.0) == pytest.approx(-0.5 / 50)
+    assert shape(-0.3, 0.0, lead_visible=True, lead_distance=30.0) == pytest.approx(-2.5 / 50)
+    # urgent braking is not shaped
+    assert shape(-1.5, 0.0) == -1.5
+    assert shape(-1.0, 0.0) == -1.0
+    assert tunes.shape_hyundai_canfd_scc_accel(STINGER, True, False, True, -0.3, 0.0, **kwargs) == pytest.approx(-5.0 / 50)  # stopping
     assert tunes.shape_hyundai_canfd_scc_accel(STINGER, False, False, False, 1.0, 0.5, **kwargs) == 0.0
     assert tunes.shape_hyundai_canfd_scc_accel(STINGER, True, True, False, 1.0, 0.5, **kwargs) == 0.0
+
+  def test_gv70_shape_still_clips_both_ways(self):
+    assert tunes.shape_hyundai_canfd_scc_accel(GV70, True, False, False, -1.5, 0.0) == pytest.approx(-0.1)
+    assert tunes.shape_hyundai_canfd_scc_accel(GV70, True, False, False, 1.0, 0.0) == pytest.approx(0.03)
 
 
 class TestVariantC:
@@ -185,12 +180,25 @@ class TestVariantC:
     state = state or Ioniq6LongitudinalTuningState()
     return update_ioniq_6_longitudinal_tuning(state, accel_cmd, v_ego, a_ego, long_state, True, kia_stinger_2022=stinger)
 
-  @pytest.mark.parametrize("v_ego, cap", ((0.0, 1.0), (1.0, 0.7), (3.0, 0.5), (20.0, 0.5)))
-  def test_upper_jerk_capped_after_min_floor(self, v_ego, cap):
-    state = self.run_update(1.0, v_ego=v_ego)
-    assert state.jerk_upper == pytest.approx(cap)
-    state = self.run_update(0.01, v_ego=20.0)  # tiny error: the 0.6 floor must not lift it above 0.5
-    assert state.jerk_upper <= 0.5 + 1e-9
+  @pytest.mark.parametrize("long_state, upper", ((LongCtrlState.pid, 3.0), (LongCtrlState.starting, 1.0)))
+  def test_upper_jerk_is_todays(self, long_state, upper):
+    assert self.run_update(1.0, long_state=long_state).jerk_upper == upper
+
+  def test_rising_accel_passes_through(self):
+    state = self.run_update(0.5, state=Ioniq6LongitudinalTuningState(accel_last=-0.8, actual_accel=-0.8))
+    assert state.actual_accel == pytest.approx(0.5)
+    assert state.accel_last == pytest.approx(0.5)
+
+  def test_lower_jerk_follows_lead(self):
+    def lower(lead_visible, lead_distance, accel=-0.3, **kw):
+      state = Ioniq6LongitudinalTuningState(accel_last=0.0)
+      return update_ioniq_6_longitudinal_tuning(state, accel, 20.0, 0.0, LongCtrlState.pid, True, kia_stinger_2022=True,
+                                                lead_visible=lead_visible, lead_distance=lead_distance, **kw).jerk_lower
+    assert lower(True, 30.0) == 2.5
+    assert lower(True, 80.0) == 0.5
+    assert lower(False, 0.0) == 0.5
+    assert lower(False, 0.0, accel=-0.8) == 2.5
+    assert lower(True, 80.0, accel=-1.5) == 5.0
 
   def test_lower_jerk_capped(self):
     state = self.run_update(-0.9, a_ego=-2.0, state=Ioniq6LongitudinalTuningState(accel_last=0.0))
@@ -225,9 +233,9 @@ class TestVariantC:
     def run(stinger):
       state = Ioniq6LongitudinalTuningState(long_control_state_last=LongCtrlState.stopping)
       return self.run_update(1.0, v_ego=0.4, state=state, long_state=LongCtrlState.pid, stinger=stinger)
-    # the restart tweak caps jerk_upper at 3.6 * 1.2 = 4.3 at 0.4 m/s; the stock curve (1.0 .. 0.7) applies instead
-    assert run(True).jerk_upper == pytest.approx(0.88)
-    assert run(False).jerk_upper > 1.0
+    # the restart tweak caps jerk_upper to the stop-release curve; the Stinger keeps today's 3.0
+    assert run(True).jerk_upper == pytest.approx(3.0)
+    assert run(False).jerk_upper != pytest.approx(3.0)
 
   @pytest.mark.parametrize("kwargs", (
     {"ev6_gt_line": True}, {"low_speed_stop_brake_cap": True}, {"ev9": True}, {},
@@ -284,21 +292,22 @@ class TestCanOutput:
     select_variant(monkeypatch, "B")
     h = Harness()
     out = h.run(1.0, 20, v_ego=20.0)
-    values = [o[0] for o in out]
-    assert values == sorted(values)
-    assert values[-1] == pytest.approx(10 * 0.5 / 50, abs=0.01)
-    for accel_value, jerk_upper, jerk_lower, accel_raw in out:
-      assert jerk_upper == pytest.approx(0.5)
+    for accel_value, jerk_upper, jerk_lower, accel_raw in out[2:]:
+      assert accel_value == pytest.approx(1.0, abs=0.01)  # rising accel is not ramped
+      assert jerk_upper == pytest.approx(3.0)
       assert jerk_lower == pytest.approx(0.5)  # no lead
       assert accel_raw == pytest.approx(accel_value, abs=1e-6)
 
-  def test_variant_b_urgent_braking_sends_lower_jerk_5(self, monkeypatch):
+  def test_variant_b_braking_ramps_and_urgent_passes_through(self, monkeypatch):
     select_variant(monkeypatch, "B")
     h = Harness()
     h.run(0.0, 4)
+    out = h.run(-0.9, 4)
+    assert -0.9 < out[-1][0] < 0.0
+    assert all(o[2] == pytest.approx(2.5) for o in h.run(-0.9, 2, lead=30.0))
     out = h.run(-3.0, 4)
     assert all(o[2] == pytest.approx(5.0) for o in out)
-    assert out[-1][0] < -0.1  # rate limited at 5 m/s^3 / 50 Hz
+    assert out[-1][0] == pytest.approx(-3.0, abs=0.01)
 
   def test_variant_b_lead_changes_lower_jerk(self, monkeypatch):
     select_variant(monkeypatch, "B")
@@ -310,14 +319,16 @@ class TestCanOutput:
     select_variant(monkeypatch, "C")
     h = Harness()
     out = h.run(0.5, 40, v_ego=20.0)
-    assert 0.0 < out[-1][0] < 0.5
-    assert all(o[1] <= 0.5 + 1e-6 for o in out)
-    assert all(o[2] <= 2.5 + 1e-6 for o in out)
-    out = h.run(-0.9, 6, v_ego=20.0)
+    assert out[-1][0] == pytest.approx(0.5, abs=0.01)  # rising accel is not ramped
+    assert all(o[1] == pytest.approx(3.0) for o in out)
+    out = h.run(-0.9, 6, v_ego=20.0, lead=30.0)
     assert out[-1][0] > -0.9  # ramped, not passed through
+    assert all(o[2] <= 2.5 + 1e-6 for o in out)
     out = h.run(-2.5, 2, v_ego=20.0)
     assert out[-1][0] == pytest.approx(-2.5, abs=0.01)
     assert out[-1][2] == pytest.approx(5.0)
+    out = h.run(0.2, 2, v_ego=20.0)  # release after braking passes through too
+    assert out[-1][0] == pytest.approx(0.2, abs=0.01)
 
   def test_variant_c_resets_when_disengaged(self, monkeypatch):
     select_variant(monkeypatch, "C")
@@ -326,8 +337,8 @@ class TestCanOutput:
     assert h.controller._ioniq_6_long_tuning.accel_last != 0.0
     h.run(0.0, 2, state=LongCtrlState.off, enabled=False)
     assert h.controller._ioniq_6_long_tuning.accel_last == 0.0
-    out = h.run(0.2, 2, v_ego=20.0)
-    assert abs(out[0][0]) < 0.1
+    out = h.run(-0.8, 2, v_ego=20.0)
+    assert out[0][0] > -0.2  # braking ramps from the reset state, not from the old -0.8
 
 
 class TestDelayAndPlanner:
@@ -346,15 +357,9 @@ class TestDelayAndPlanner:
     CarInterface.apply_post_fingerprint_params(CP, CAR.KIA_STINGER, gen_empty_fingerprint(), [])
     assert CP.longitudinalActuatorDelay == default_delay
 
-  @pytest.mark.parametrize("variant, scale, rates", (("A", 1.0, (0.0, 0.0)), ("B", 1.25, (2.0, 1.25)), ("C", 1.25, (2.0, 1.25))))
-  def test_planner_entries_only_for_b_and_c(self, monkeypatch, variant, scale, rates):
+  @pytest.mark.parametrize("variant", ("A", "B", "C"))
+  def test_no_planner_entries(self, monkeypatch, variant):
     select_variant(monkeypatch, variant)
-    assert tunes.get_lead_follow_jerk_scale(STINGER) == scale
-    assert tunes.get_far_follow_output_slew_rates(STINGER) == rates
-
-  def test_planner_entries_other_cars_untouched(self, monkeypatch):
-    select_variant(monkeypatch, "B")
-    other = SimpleNamespace(brand="hyundai", carFingerprint="KIA_STINGER", openpilotLongitudinalControl=True)
-    assert tunes.get_lead_follow_jerk_scale(other) == 1.0
-    assert tunes.get_far_follow_output_slew_rates(other) == (0.0, 0.0)
+    assert tunes.get_lead_follow_jerk_scale(STINGER) == 1.0
+    assert tunes.get_far_follow_output_slew_rates(STINGER) == (0.0, 0.0)
     assert tunes.get_lead_follow_jerk_scale(GV70) == 1.75
