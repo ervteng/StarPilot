@@ -1001,6 +1001,7 @@ KIA_EV6_GT_LINE_LONG_TUNING_VDS_PREFIXES = frozenset({
   "C4DLC",
 })
 KIA_EV6_GT_LINE_LONG_TUNING_TESTING_GROUND_ID = "5"
+KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID = "9"
 
 KIA_RAY_EV_VIN_VDS_PREFIXES = frozenset({
   "CG81A",
@@ -1018,6 +1019,17 @@ def hyundai_cancel_button_enables_cruise(car_fingerprint) -> bool:
 def kia_ev6_gt_line_longitudinal_tuning(car_fingerprint, vin: str, testing_ground_active: bool = False) -> bool:
   vin_match = isinstance(vin, str) and len(vin) == 17 and vin[3:8] in KIA_EV6_GT_LINE_LONG_TUNING_VDS_PREFIXES
   return car_fingerprint == CAR.KIA_EV6 and (vin_match or testing_ground_active)
+
+
+def kia_stinger_2022_longitudinal_tuning(car_fingerprint, openpilot_long: bool,
+                                         variant_b_active: bool = False, variant_c_active: bool = False) -> str | None:
+  if car_fingerprint != CAR.KIA_STINGER_2022 or not openpilot_long:
+    return None
+  if variant_b_active:
+    return "B"
+  if variant_c_active:
+    return "C"
+  return None
 
 
 def kia_ray_ev_vin(vin: str) -> bool:

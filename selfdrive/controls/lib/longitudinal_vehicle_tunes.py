@@ -1,5 +1,8 @@
 import numpy as np
 
+from opendbc.car.hyundai.values import KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID, kia_stinger_2022_longitudinal_tuning
+from openpilot.starpilot.common.testing_grounds import testing_ground
+
 
 HONDA_HRV_3G_FAR_FOLLOW_BRAKE_SLEW_RATE = 3.0
 HONDA_HRV_3G_FAR_FOLLOW_RELEASE_SLEW_RATE = 2.0
@@ -31,6 +34,22 @@ GENESIS_GV70_ELECTRIFIED_SCC_JERK_LOWER = 2.0
 GENESIS_GV70_ELECTRIFIED_SCC_URGENT_JERK_LOWER = 5.0
 GENESIS_GV70_ELECTRIFIED_SCC_URGENT_ACCEL = -1.0
 HYUNDAI_CANFD_SCC_FREQUENCY = 50.0
+# Kia Stinger 2022 stock-like tunes (Testing Ground slot 9, variants B and C). Initial values come from
+# 4 factory-ACC drives and are meant to be re-fit to stock data.
+KIA_STINGER_2022_ACTUATOR_DELAY = 0.5
+KIA_STINGER_2022_LEAD_FOLLOW_JERK_SCALE = 1.25
+KIA_STINGER_2022_FAR_FOLLOW_BRAKE_SLEW_RATE = 2.0
+KIA_STINGER_2022_FAR_FOLLOW_RELEASE_SLEW_RATE = 1.25
+KIA_STINGER_2022_SCC_JERK_UPPER = 0.5
+KIA_STINGER_2022_SCC_JERK_UPPER_SPEED_BP = [0.0, 1.0, 3.0]
+KIA_STINGER_2022_SCC_JERK_UPPER_SPEED_V = [1.0, 0.7, 0.5]
+KIA_STINGER_2022_SCC_JERK_LOWER = 2.5
+KIA_STINGER_2022_SCC_JERK_LOWER_NO_LEAD = 0.5
+KIA_STINGER_2022_SCC_JERK_LOWER_LEAD_DISTANCE_BP = [60.0, 90.0]
+KIA_STINGER_2022_SCC_JERK_LOWER_LEAD_DISTANCE_V = [2.5, 0.5]
+KIA_STINGER_2022_SCC_BRAKING_JERK_LOWER_ACCEL = -0.5
+KIA_STINGER_2022_SCC_URGENT_JERK_LOWER = 5.0
+KIA_STINGER_2022_SCC_URGENT_ACCEL = -1.0
 FORD_LIGHTNING_LEAD_FOLLOW_JERK_SCALE = 1.35
 HONDA_CRV_5G_LEAD_FOLLOW_JERK_SCALE = 1.35
 GM_SILVERADO_EARLY_FOLLOW_MIN_EGO_SPEED = 18.0
@@ -643,11 +662,36 @@ def get_far_follow_output_slew_min_speed(CP, default_min_speed):
   return default_min_speed
 
 
+_kia_stinger_2022_tune_latch = {}
+
+
+def get_kia_stinger_2022_stock_tune(CP):
+  """Returns "B", "C" or None. Latched on first read so a mid-drive Testing Ground change cannot jump the planner."""
+  if str(getattr(CP, "carFingerprint", "")) != "KIA_STINGER_2022":
+    return None
+  if "tune" not in _kia_stinger_2022_tune_latch:
+    _kia_stinger_2022_tune_latch["tune"] = kia_stinger_2022_longitudinal_tuning(
+      CP.carFingerprint, getattr(CP, "openpilotLongitudinalControl", False),
+      testing_ground.use(KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID, "B"),
+      testing_ground.use(KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID, "C"),
+    )
+  return _kia_stinger_2022_tune_latch["tune"]
+
+
+def get_kia_stinger_2022_scc_jerk_upper(v_ego):
+  return float(np.interp(v_ego, KIA_STINGER_2022_SCC_JERK_UPPER_SPEED_BP, KIA_STINGER_2022_SCC_JERK_UPPER_SPEED_V))
+
+
 def get_far_follow_output_slew_rates(CP):
   if getattr(CP, "brand", "") == "hyundai" and str(getattr(CP, "carFingerprint", "")) == "KIA_NIRO_EV":
     return (
       KIA_NIRO_EV_FAR_FOLLOW_BRAKE_SLEW_RATE,
       KIA_NIRO_EV_FAR_FOLLOW_RELEASE_SLEW_RATE,
+    )
+  if get_kia_stinger_2022_stock_tune(CP) is not None:
+    return (
+      KIA_STINGER_2022_FAR_FOLLOW_BRAKE_SLEW_RATE,
+      KIA_STINGER_2022_FAR_FOLLOW_RELEASE_SLEW_RATE,
     )
   if CP.brand == "honda" and str(CP.carFingerprint) == "HONDA_ACCORD":
     return (
@@ -694,6 +738,8 @@ def get_lead_follow_jerk_scale(CP):
     str(getattr(CP, "carFingerprint", "")) == "GENESIS_GV70_ELECTRIFIED_1ST_GEN"
   ):
     return GENESIS_GV70_ELECTRIFIED_LEAD_FOLLOW_JERK_SCALE
+  if get_kia_stinger_2022_stock_tune(CP) is not None:
+    return KIA_STINGER_2022_LEAD_FOLLOW_JERK_SCALE
   if is_honda_crv_5g(CP):
     return HONDA_CRV_5G_LEAD_FOLLOW_JERK_SCALE
   if is_ford_f150_lightning(CP):
@@ -701,17 +747,34 @@ def get_lead_follow_jerk_scale(CP):
   return 1.0
 
 
-def get_hyundai_canfd_scc_jerk_limits(CP, stopping=False, accel=0.0):
+def get_hyundai_canfd_scc_jerk_limits(CP, stopping=False, accel=0.0, kia_stinger_2022_tune=False,
+                                      v_ego=None, lead_visible=None, lead_distance=None):
   if str(getattr(CP, "carFingerprint", "")) == "GENESIS_GV70_ELECTRIFIED_1ST_GEN":
     jerk_lower = GENESIS_GV70_ELECTRIFIED_SCC_URGENT_JERK_LOWER \
       if stopping or accel <= GENESIS_GV70_ELECTRIFIED_SCC_URGENT_ACCEL \
       else GENESIS_GV70_ELECTRIFIED_SCC_JERK_LOWER
     return GENESIS_GV70_ELECTRIFIED_SCC_JERK_UPPER, jerk_lower
+  if kia_stinger_2022_tune and str(getattr(CP, "carFingerprint", "")) == "KIA_STINGER_2022":
+    # v_ego and lead_visible/lead_distance are optional: without them the fixed upper/lower limits are used.
+    jerk_upper = KIA_STINGER_2022_SCC_JERK_UPPER if v_ego is None else get_kia_stinger_2022_scc_jerk_upper(v_ego)
+    if stopping or accel <= KIA_STINGER_2022_SCC_URGENT_ACCEL:
+      return jerk_upper, KIA_STINGER_2022_SCC_URGENT_JERK_LOWER
+    jerk_lower = KIA_STINGER_2022_SCC_JERK_LOWER
+    if lead_visible is not None:
+      if lead_visible and lead_distance is not None:
+        jerk_lower = float(np.interp(lead_distance, KIA_STINGER_2022_SCC_JERK_LOWER_LEAD_DISTANCE_BP,
+                                     KIA_STINGER_2022_SCC_JERK_LOWER_LEAD_DISTANCE_V))
+      else:
+        jerk_lower = KIA_STINGER_2022_SCC_JERK_LOWER_NO_LEAD
+      # openpilot's own braking without a close lead (curves, stops) still ramps at the lead-braking rate
+      if accel < KIA_STINGER_2022_SCC_BRAKING_JERK_LOWER_ACCEL:
+        jerk_lower = max(jerk_lower, KIA_STINGER_2022_SCC_JERK_LOWER)
+    return jerk_upper, jerk_lower
   return None
 
 
-def shape_hyundai_canfd_scc_accel(CP, enabled, gas_override, stopping, accel, accel_last):
-  jerk_limits = get_hyundai_canfd_scc_jerk_limits(CP, stopping, accel)
+def shape_hyundai_canfd_scc_accel(CP, enabled, gas_override, stopping, accel, accel_last, **jerk_limit_kwargs):
+  jerk_limits = get_hyundai_canfd_scc_jerk_limits(CP, stopping, accel, **jerk_limit_kwargs)
   if jerk_limits is None:
     return float(accel)
   if not enabled or gas_override:
