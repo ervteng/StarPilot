@@ -81,3 +81,11 @@ def test_stinger_long_tune_slot_offers_a_b_c(tmp_path, monkeypatch):
     assert tg.testing_ground.use(tg.TESTING_GROUND_9, "B") == (variant == "B")
     monkeypatch.setattr(tg, "_CACHE_LAST_REFRESH", 0.0)
     assert tg.testing_ground.use(tg.TESTING_GROUND_9, "C") == (variant == "C")
+
+
+def test_stinger_stopped_lead_slot_is_declared_with_a_and_b_modes():
+  slot_id = tg.TESTING_GROUND_10
+  assert slot_id in tg.TESTING_GROUND_IDS
+  assert slot_id in tg._VISIBLE_TESTING_GROUND_IDS
+  assert set(tg.TESTING_GROUND_VARIANT_LABELS[slot_id]) == {"A", "B"}
+  assert hasattr(tg.testing_ground, "use_10")

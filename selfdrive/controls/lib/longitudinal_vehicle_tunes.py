@@ -131,6 +131,24 @@ KIA_EV9_STOPPED_LEAD_MIN_CLOSING_SPEED = 0.15
 KIA_EV9_STOPPED_LEAD_MAX_DISTANCE = 30.0
 KIA_EV9_STOPPED_LEAD_RAMP_DISTANCE = 8.0
 KIA_EV9_STOPPED_LEAD_MAX_LATERAL_OFFSET = 1.75
+# Kia Stinger 2022 stopped-lead approach (Testing Ground slot below, tune B). The MPC's stopped-lead gap is
+# v^2/(2*2.5) + t_follow*v + 6 m; this tune replaces it with a constant-decel curve v^2/(2*a_t) + g0.
+KIA_STINGER_2022_STOPPED_LEAD_TESTING_GROUND_ID = "10"
+KIA_STINGER_2022_STOPPED_LEAD_TARGET_DECEL = 1.4  # m/s^2, driver/stock mid-approach decel 1.2-1.6 (54 stopped-lead stops)
+KIA_STINGER_2022_STOPPED_LEAD_FINAL_GAP_M = 4.0  # m, driver stops 3.7-4.2 m behind the lead, stock 3.1-3.7 m
+KIA_STINGER_2022_STOPPED_LEAD_MPC_COMFORT_BRAKE = 2.5  # mirrors long_mpc.COMFORT_BRAKE (checked by a unit test)
+KIA_STINGER_2022_STOPPED_LEAD_MPC_STOP_DISTANCE = 6.0  # mirrors long_mpc.STOP_DISTANCE (checked by a unit test)
+KIA_STINGER_2022_STOPPED_LEAD_DEFAULT_T_FOLLOW = 1.45  # s, standard personality, used when the caller has none
+KIA_STINGER_2022_STOPPED_LEAD_SAFE_DECEL = 3.0  # m/s^2, nearer than v^2/(2*this)+g0 is "late": never relax braking
+KIA_STINGER_2022_STOPPED_LEAD_LATE_FADE_M = 1.5  # m, negative (relaxing) bias ramps in over this much extra gap
+KIA_STINGER_2022_STOPPED_LEAD_MAX_BIAS_M = 40.0  # m, cap on the positive (earlier braking) bias
+KIA_STINGER_2022_STOPPED_LEAD_MAX_EGO_SPEED = 22.0  # m/s, same window as Prius / CR-V
+KIA_STINGER_2022_STOPPED_LEAD_MAX_SPEED = 1.0
+KIA_STINGER_2022_STOPPED_LEAD_MIN_CLOSING_SPEED = 0.15
+KIA_STINGER_2022_STOPPED_LEAD_MAX_DISTANCE = 80.0
+KIA_STINGER_2022_STOPPED_LEAD_FULL_DISTANCE = 60.0  # bias is full inside this, ramps to 0 at MAX_DISTANCE
+KIA_STINGER_2022_STOPPED_LEAD_MAX_LATERAL_OFFSET = 1.75
+KIA_STINGER_2022_STOPPED_LEAD_MIN_VISION_MODEL_PROB = 0.9
 HONDA_CRV_5G_LOW_SPEED_STOP_MAX_EGO_SPEED = 4.5
 HONDA_CRV_5G_LOW_SPEED_STOP_MAX_LEAD_SPEED = 0.5
 HONDA_CRV_5G_LOW_SPEED_STOP_MIN_MODEL_PROB = 0.99
@@ -373,15 +391,88 @@ def get_kia_ev9_stopped_lead_obstacle_bias(CP, lead, v_ego):
   return float(min(bias, max(distance - 0.5, 0.0)))
 
 
-def get_stopped_lead_obstacle_bias(CP, lead, v_ego, mode):
+def get_kia_stinger_2022_stopped_lead_obstacle_bias(CP, lead, v_ego, t_follow=None, enabled=False):
+  """Shape the MPC stopped-lead gap into a constant-decel curve ending ~g0 behind the lead.
+
+  Sign: long_mpc does `lead_obstacle -= bias`, so positive bias pulls the obstacle closer (brake earlier) and
+  negative pushes it farther (brake later, closer final stop). The MPC keeps `D_mpc(v) = v^2/(2*2.5) + T*v + 6`
+  behind the obstacle, so the bias that makes the car follow `D_t(v) = v^2/(2*a_t) + g0` is `D_t - D_mpc`.
+  Negative values (low speed) are only allowed while the gap is still comfortably outside the safe stopping
+  distance for the current speed; a late-detected lead therefore never gets a weaker obstacle than baseline.
+  """
+  if (
+    not enabled or
+    getattr(CP, "brand", "") != "hyundai" or
+    str(getattr(CP, "carFingerprint", "")) != "KIA_STINGER_2022" or
+    lead is None or not bool(getattr(lead, "status", False)) or
+    float(v_ego) <= 0.0 or float(v_ego) > KIA_STINGER_2022_STOPPED_LEAD_MAX_EGO_SPEED or
+    float(getattr(lead, "vLead", 0.0)) > KIA_STINGER_2022_STOPPED_LEAD_MAX_SPEED or
+    abs(float(getattr(lead, "yRel", 0.0))) > KIA_STINGER_2022_STOPPED_LEAD_MAX_LATERAL_OFFSET or
+    (not bool(getattr(lead, "radar", False)) and
+     float(getattr(lead, "modelProb", 0.0)) < KIA_STINGER_2022_STOPPED_LEAD_MIN_VISION_MODEL_PROB)
+  ):
+    return 0.0
+
+  v = float(v_ego)
+  distance = float(getattr(lead, "dRel", float("inf")))
+  closing_speed = v - float(getattr(lead, "vLead", 0.0))
+  if (
+    distance <= 0.0 or distance > KIA_STINGER_2022_STOPPED_LEAD_MAX_DISTANCE or
+    closing_speed < KIA_STINGER_2022_STOPPED_LEAD_MIN_CLOSING_SPEED
+  ):
+    return 0.0
+
+  t_follow = KIA_STINGER_2022_STOPPED_LEAD_DEFAULT_T_FOLLOW if t_follow is None else float(t_follow)
+  mpc_gap = (
+    v * v / (2.0 * KIA_STINGER_2022_STOPPED_LEAD_MPC_COMFORT_BRAKE) + t_follow * v +
+    KIA_STINGER_2022_STOPPED_LEAD_MPC_STOP_DISTANCE
+  )
+  g0 = KIA_STINGER_2022_STOPPED_LEAD_FINAL_GAP_M
+  target_gap = v * v / (2.0 * KIA_STINGER_2022_STOPPED_LEAD_TARGET_DECEL) + g0
+  bias = target_gap - mpc_gap
+
+  if bias > 0.0:
+    strength = np.clip(
+      (KIA_STINGER_2022_STOPPED_LEAD_MAX_DISTANCE - distance) /
+      (KIA_STINGER_2022_STOPPED_LEAD_MAX_DISTANCE - KIA_STINGER_2022_STOPPED_LEAD_FULL_DISTANCE),
+      0.0, 1.0,
+    )
+    return float(min(bias * strength, KIA_STINGER_2022_STOPPED_LEAD_MAX_BIAS_M, max(distance - 0.5, 0.0)))
+
+  safe_gap = v * v / (2.0 * KIA_STINGER_2022_STOPPED_LEAD_SAFE_DECEL) + g0
+  bias = max(bias, safe_gap - mpc_gap)  # never plan tighter than the safe-decel curve
+  relax = np.clip((distance - safe_gap) / KIA_STINGER_2022_STOPPED_LEAD_LATE_FADE_M, 0.0, 1.0)
+  return float(bias * relax)
+
+
+def get_stopped_lead_obstacle_bias(CP, lead, v_ego, mode, t_follow=None, stinger_stopped_lead_tune=False):
   """Dispatch vehicle-specific stopped-lead spacing tweaks for the active mode."""
   mode_bias = 0.0
   if mode == "acc":
+    # Only this entry may be negative (obstacle moved farther); the others are >= 0 and not Stinger.
+    stinger_bias = get_kia_stinger_2022_stopped_lead_obstacle_bias(
+      CP, lead, v_ego, t_follow=t_follow, enabled=stinger_stopped_lead_tune,
+    )
+    if stinger_bias != 0.0:
+      return stinger_bias
     mode_bias = max(
       get_toyota_prius_stopped_lead_obstacle_bias(CP, lead, v_ego),
       get_honda_crv_5g_stopped_lead_obstacle_bias(CP, lead, v_ego),
     )
   return max(mode_bias, get_kia_ev9_stopped_lead_obstacle_bias(CP, lead, v_ego))
+
+
+def get_stopped_lead_obstacle_biases(CP, leads, v_ego, mode, t_follow=None, *, model_should_stop=False,
+                                     red_light=False, forcing_stop=False, standstill=False,
+                                     stinger_stopped_lead_tune=False):
+  """Per-lead obstacle bias; zero whenever a stop is already planned or the car is stopped."""
+  if model_should_stop or red_light or forcing_stop or standstill:
+    return tuple(0.0 for _ in leads)
+  return tuple(
+    get_stopped_lead_obstacle_bias(CP, lead, v_ego, mode, t_follow=t_follow,
+                                   stinger_stopped_lead_tune=stinger_stopped_lead_tune)
+    for lead in leads
+  )
 
 
 def get_honda_crv_5g_low_speed_stopped_lead_cap(CP, lead, v_ego, accel_min):

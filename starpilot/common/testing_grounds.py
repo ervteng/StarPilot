@@ -16,6 +16,7 @@ TESTING_GROUND_6 = "6"
 TESTING_GROUND_7 = "7"
 TESTING_GROUND_8 = "8"
 TESTING_GROUND_9 = "9"
+TESTING_GROUND_10 = "10"
 
 TESTING_GROUND_IDS = (
   TESTING_GROUND_1,
@@ -27,6 +28,7 @@ TESTING_GROUND_IDS = (
   TESTING_GROUND_7,
   TESTING_GROUND_8,
   TESTING_GROUND_9,
+  TESTING_GROUND_10,
 )
 
 TESTING_GROUNDS_STATE_PATH = Path("/tmp/the_galaxy_testing_grounds_slots.json") if PC else Path("/data/testing_grounds/slots.json")
@@ -101,6 +103,15 @@ TESTING_GROUNDS_SLOT_DEFINITIONS = (
     "aLabel": "A - Installed tune",
     "bLabel": "B - Stock-like (GV70 style)",
     "cLabel": "C - Ioniq 6 tune (as-is)",
+  },
+  {
+    "id": TESTING_GROUND_10,
+    "name": "Stinger Stopped Lead",
+    "description": "Kia Stinger 2022 approach to a stopped lead: B starts braking earlier, brakes evenly (~1.4 m/s^2) "
+                   "and stops about 4 m behind the car. Braking is never relaxed for a late-detected lead. "
+                   "Takes effect the next time the car starts.",
+    "aLabel": "A - Installed behaviour",
+    "bLabel": "B - Stinger stopped-lead tune",
   },
 )
 
@@ -272,6 +283,7 @@ use_testing_ground_6 = _TestingGroundFlag(TESTING_GROUND_6)
 use_testing_ground_7 = _TestingGroundFlag(TESTING_GROUND_7)
 use_testing_ground_8 = _TestingGroundFlag(TESTING_GROUND_8)
 use_testing_ground_9 = _TestingGroundFlag(TESTING_GROUND_9)
+use_testing_ground_10 = _TestingGroundFlag(TESTING_GROUND_10)
 
 
 class _TestingGroundNamespace:
@@ -286,6 +298,7 @@ class _TestingGroundNamespace:
   id_7 = TESTING_GROUND_7
   id_8 = TESTING_GROUND_8
   id_9 = TESTING_GROUND_9
+  id_10 = TESTING_GROUND_10
 
   use_1 = use_testing_ground_1
   use_2 = use_testing_ground_2
@@ -296,6 +309,7 @@ class _TestingGroundNamespace:
   use_7 = use_testing_ground_7
   use_8 = use_testing_ground_8
   use_9 = use_testing_ground_9
+  use_10 = use_testing_ground_10
 
   def use(self, slot_id, variant=TESTING_GROUND_TEST_VARIANT):
     return is_testing_ground_active(slot_id, variant)
