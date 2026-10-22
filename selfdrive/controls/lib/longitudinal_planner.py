@@ -8,6 +8,7 @@ from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
+from openpilot.starpilot.common.testing_grounds import testing_ground
 from openpilot.starpilot.common.model_versions import is_tinygrad_model_version
 from openpilot.starpilot.controls.lib.starpilot_vcruise import FT_TO_M, OFFSET_FT_MAX, OFFSET_FT_MIN
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
@@ -45,7 +46,8 @@ from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import (
   is_toyota_rav4_tss2_radar_follow_lead,
   get_toyota_sienna_post_departure_restop_cap,
   get_untracked_slow_lead_decel_scale,
-  get_stopped_lead_obstacle_bias,
+  get_stopped_lead_obstacle_biases,
+  KIA_STINGER_2022_STOPPED_LEAD_TESTING_GROUND_ID,
   get_honda_crv_5g_low_speed_stopped_lead_cap,
   allow_honda_crv_5g_vision_gap_settle,
   get_honda_crv_5g_early_radar_follow_cap,
@@ -577,6 +579,11 @@ class LongitudinalPlanner:
     self.model_allow_throttle_transition_t = 0.0
     self.allow_throttle = True
     self.mode = 'acc'
+    # latched once at planner start so a mid-drive slot change cannot jump the stopping profile
+    self.stinger_stopped_lead_tune = bool(
+      CP.brand == "hyundai" and str(CP.carFingerprint) == "KIA_STINGER_2022" and
+      testing_ground.use(KIA_STINGER_2022_STOPPED_LEAD_TESTING_GROUND_ID, "B")
+    )
     self.is_preap = (
       CP.brand == "tesla" and CP.carFingerprint == "TESLA_MODEL_S_PREAP" and
       CP.openpilotLongitudinalControl and not CP.pcmCruise
@@ -2363,17 +2370,14 @@ class LongitudinalPlanner:
         get_force_stop_distance_bias(self.CP.carFingerprint)
       )
 
-    stopped_lead_obstacle_bias = (0.0, 0.0)
-    if (
-      not bool(getattr(sm['modelV2'].action, 'shouldStop', False)) and
-      not bool(getattr(sm['starpilotPlan'], 'redLight', False)) and
-      not bool(getattr(sm['starpilotPlan'], 'forcingStop', False)) and
-      not bool(getattr(sm['carState'], 'standstill', False))
-    ):
-      stopped_lead_obstacle_bias = tuple(
-        get_stopped_lead_obstacle_bias(self.CP, lead, scene_v_ego, self.mode)
-        for lead in (self.lead_one, self.lead_two)
-      )
+    stopped_lead_obstacle_bias = get_stopped_lead_obstacle_biases(
+      self.CP, (self.lead_one, self.lead_two), scene_v_ego, self.mode, effective_t_follow,
+      model_should_stop=bool(getattr(sm['modelV2'].action, 'shouldStop', False)),
+      red_light=bool(getattr(sm['starpilotPlan'], 'redLight', False)),
+      forcing_stop=bool(getattr(sm['starpilotPlan'], 'forcingStop', False)),
+      standstill=bool(getattr(sm['carState'], 'standstill', False)),
+      stinger_stopped_lead_tune=self.stinger_stopped_lead_tune,
+    )
 
     self.mpc.update(sm['radarState'], v_cruise, x, v, a, j,
                     sm['starpilotPlan'].dangerFactor, effective_t_follow,

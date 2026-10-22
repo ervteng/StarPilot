@@ -52,3 +52,11 @@ def test_invalid_slot_variant_is_migrated_off_slot(tmp_path, monkeypatch):
   payload = json.loads(state_path.read_text(encoding="utf-8"))
   assert payload["activeSlot"] == tg.TESTING_GROUND_1
   assert payload["activeVariant"] == tg.DEFAULT_TESTING_GROUND_VARIANT
+
+
+def test_stinger_stopped_lead_slot_is_declared_with_a_and_b_modes():
+  slot_id = tg.TESTING_GROUND_10
+  assert slot_id in tg.TESTING_GROUND_IDS
+  assert slot_id in tg._VISIBLE_TESTING_GROUND_IDS
+  assert set(tg.TESTING_GROUND_VARIANT_LABELS[slot_id]) == {"A", "B"}
+  assert hasattr(tg.testing_ground, "use_10")

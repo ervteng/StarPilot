@@ -15,6 +15,8 @@ TESTING_GROUND_5 = "5"
 TESTING_GROUND_6 = "6"
 TESTING_GROUND_7 = "7"
 TESTING_GROUND_8 = "8"
+# 9 is taken by the Stinger Long Tune slot on the stinger-combined branch; skipped here so the branches merge cleanly.
+TESTING_GROUND_10 = "10"
 
 TESTING_GROUND_IDS = (
   TESTING_GROUND_1,
@@ -25,6 +27,7 @@ TESTING_GROUND_IDS = (
   TESTING_GROUND_6,
   TESTING_GROUND_7,
   TESTING_GROUND_8,
+  TESTING_GROUND_10,
 )
 
 TESTING_GROUNDS_STATE_PATH = Path("/tmp/the_galaxy_testing_grounds_slots.json") if PC else Path("/data/testing_grounds/slots.json")
@@ -88,6 +91,15 @@ TESTING_GROUNDS_SLOT_DEFINITIONS = (
     "description": "Modified Honda Civic Bosch lateral sandbox.",
     "aLabel": "A - Installed tune",
     "bLabel": "B - Firestar Tune",
+  },
+  {
+    "id": TESTING_GROUND_10,
+    "name": "Stinger Stopped Lead",
+    "description": "Kia Stinger 2022 approach to a stopped lead: B starts braking earlier, brakes evenly (~1.4 m/s^2) "
+                   "and stops about 4 m behind the car. Braking is never relaxed for a late-detected lead. "
+                   "Takes effect the next time the car starts.",
+    "aLabel": "A - Installed behaviour",
+    "bLabel": "B - Stinger stopped-lead tune",
   },
 )
 
@@ -258,6 +270,7 @@ use_testing_ground_5 = _TestingGroundFlag(TESTING_GROUND_5)
 use_testing_ground_6 = _TestingGroundFlag(TESTING_GROUND_6)
 use_testing_ground_7 = _TestingGroundFlag(TESTING_GROUND_7)
 use_testing_ground_8 = _TestingGroundFlag(TESTING_GROUND_8)
+use_testing_ground_10 = _TestingGroundFlag(TESTING_GROUND_10)
 
 
 class _TestingGroundNamespace:
@@ -271,6 +284,7 @@ class _TestingGroundNamespace:
   id_6 = TESTING_GROUND_6
   id_7 = TESTING_GROUND_7
   id_8 = TESTING_GROUND_8
+  id_10 = TESTING_GROUND_10
 
   use_1 = use_testing_ground_1
   use_2 = use_testing_ground_2
@@ -280,6 +294,7 @@ class _TestingGroundNamespace:
   use_6 = use_testing_ground_6
   use_7 = use_testing_ground_7
   use_8 = use_testing_ground_8
+  use_10 = use_testing_ground_10
 
   def use(self, slot_id, variant=TESTING_GROUND_TEST_VARIANT):
     return is_testing_ground_active(slot_id, variant)
