@@ -117,12 +117,12 @@ KIA_EV9_STOPPED_LEAD_MAX_LATERAL_OFFSET = 1.75
 # v^2/(2*2.5) + t_follow*v + 6 m; this tune replaces it with a constant-decel curve v^2/(2*a_t) + g0.
 KIA_STINGER_2022_STOPPED_LEAD_TESTING_GROUND_ID = "10"
 KIA_STINGER_2022_STOPPED_LEAD_TARGET_DECEL = 1.4  # m/s^2, driver/stock mid-approach decel 1.2-1.6 (54 stopped-lead stops)
-KIA_STINGER_2022_STOPPED_LEAD_FINAL_GAP_M = 4.0  # m, driver stops 3.7-4.2 m behind the lead, stock 3.1-3.7 m
+KIA_STINGER_2022_STOPPED_LEAD_FINAL_GAP_M = 4.25  # m, driver stops 3.7-4.2 m behind the lead, stock 3.1-3.7 m; sim stops land ~0.3 m inside this (3.3-4.4 m)
 KIA_STINGER_2022_STOPPED_LEAD_MPC_COMFORT_BRAKE = 2.5  # mirrors long_mpc.COMFORT_BRAKE (checked by a unit test)
 KIA_STINGER_2022_STOPPED_LEAD_MPC_STOP_DISTANCE = 6.0  # mirrors long_mpc.STOP_DISTANCE (checked by a unit test)
 KIA_STINGER_2022_STOPPED_LEAD_DEFAULT_T_FOLLOW = 1.45  # s, standard personality, used when the caller has none
-KIA_STINGER_2022_STOPPED_LEAD_SAFE_DECEL = 3.0  # m/s^2, nearer than v^2/(2*this)+g0 is "late": never relax braking
-KIA_STINGER_2022_STOPPED_LEAD_LATE_FADE_M = 1.5  # m, negative (relaxing) bias ramps in over this much extra gap
+KIA_STINGER_2022_STOPPED_LEAD_SAFE_DECEL = 1.5  # m/s^2, nearer than v^2/(2*this)+g0 is "late": never relax braking (sim: 3.0 let late-detected stops end 1-2 m closer than baseline)
+KIA_STINGER_2022_STOPPED_LEAD_LATE_FADE_M = 4.0  # m, negative (relaxing) bias ramps in over this much extra gap
 KIA_STINGER_2022_STOPPED_LEAD_MAX_BIAS_M = 40.0  # m, cap on the positive (earlier braking) bias
 KIA_STINGER_2022_STOPPED_LEAD_MAX_EGO_SPEED = 22.0  # m/s, same window as Prius / CR-V
 KIA_STINGER_2022_STOPPED_LEAD_MAX_SPEED = 1.0
