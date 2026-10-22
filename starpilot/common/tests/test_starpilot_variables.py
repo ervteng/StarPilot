@@ -394,3 +394,25 @@ def test_non_toyota_software_cruise_keeps_custom_intervals():
   assert spv.software_cruise_intervals_available(True, "hyundai", False, True, True) is True
   assert spv.reverse_cruise_available(True, "hyundai", False) is False
   assert spv.speed_limit_controller_available(openpilot_longitudinal=False, redneck_cruise=False) is False
+
+
+FLM_OVERRIDES = {"schemaVersion": 1, "baseFrictionThresholds": {"standard": {"speedKnots": [0.0, 5.0, 10.0, 15.0, 25.0],
+                                                                             "values": [0.32, 0.33, 0.32, 0.32, 0.33]}}}
+
+
+@pytest.mark.parametrize("raw, expected", [
+  (FLM_OVERRIDES, FLM_OVERRIDES),  # JSON param: Params.get returns the parsed dict
+  (spv.json.dumps(FLM_OVERRIDES), FLM_OVERRIDES),
+  (None, {}),
+  ("not json", {}),
+  ([1, 2], {}),
+])
+def test_read_flm_active_overrides(raw, expected):
+  assert spv.read_flm_active_overrides(SimpleNamespace(get=lambda key: raw)) == expected
+
+
+def test_read_flm_active_overrides_round_trips_through_params(tmp_path):
+  from openpilot.common.params import Params
+  params = Params(str(tmp_path))
+  params.put("FLMActiveOverrides", FLM_OVERRIDES)
+  assert spv.read_flm_active_overrides(params) == FLM_OVERRIDES
