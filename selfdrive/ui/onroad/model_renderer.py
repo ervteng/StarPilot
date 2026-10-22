@@ -5,6 +5,7 @@ from cereal import messaging, car
 from dataclasses import dataclass, field
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.constants import CV
+from openpilot.selfdrive.controls.radard import RADAR_TO_CAMERA
 from openpilot.selfdrive.controls.lib.lane_centering import get_lane_centering_visual_direction
 from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
 from openpilot.selfdrive.ui.lib.starpilot_theme import get_param_color, get_theme_color, get_visual_color, is_stock_color_scheme, with_alpha
@@ -223,11 +224,13 @@ class ModelRenderer(Widget):
     for i, lead_data in enumerate(leads):
       if lead_data and lead_data.status:
         d_rel, y_rel, v_rel = lead_data.dRel, lead_data.yRel, lead_data.vRel
-        idx = self._get_path_length_idx(path_x_array, d_rel)
+        # dRel is radar frame; path and projection are camera frame
+        x_cam = d_rel + RADAR_TO_CAMERA
+        idx = self._get_path_length_idx(path_x_array, x_cam)
 
         # Get z-coordinate from path at the lead vehicle position
         z = self._path.raw_points[idx, 2] if idx < len(self._path.raw_points) else 0.0
-        point = self._map_to_screen(d_rel, -y_rel, z + self._path_offset_z)
+        point = self._map_to_screen(x_cam, -y_rel, z + self._path_offset_z)
         if point:
           self._lead_vehicles[i] = self._update_lead_vehicle(d_rel, v_rel, point, self._rect)
 
@@ -519,9 +522,11 @@ class ModelRenderer(Widget):
     for i, lead_data in enumerate(leads):
       if lead_data and lead_data.status:
         d_rel, y_rel, v_rel = lead_data.dRel, lead_data.yRel, lead_data.vRel
-        idx = self._get_path_length_idx(path_x_array, d_rel)
+        # dRel is radar frame; path and projection are camera frame
+        x_cam = d_rel + RADAR_TO_CAMERA
+        idx = self._get_path_length_idx(path_x_array, x_cam)
         z = self._path.raw_points[idx, 2] if idx < len(self._path.raw_points) else 0.0
-        point = self._map_to_screen(d_rel, -y_rel, z + self._path_offset_z)
+        point = self._map_to_screen(x_cam, -y_rel, z + self._path_offset_z)
         if point:
           eff_d_rel = d_rel + abs(y_rel)
           self._adjacent_lead_vehicles[i] = self._update_lead_vehicle(eff_d_rel, v_rel, point, self._rect)
@@ -688,7 +693,7 @@ class ModelRenderer(Widget):
         float(self._rect.y + self._rect.height),
       )
       screen_points = project_radar_points(
-        d_rel,
+        d_rel + RADAR_TO_CAMERA,
         in_y,
         self._path.raw_points[:, 0],
         self._path.raw_points[:, 2],
@@ -874,7 +879,7 @@ class ModelRenderer(Widget):
     clipped_mask = np.zeros(len(points), dtype=bool)
 
     for lead_type, lead in active_leads:
-      lead_x = lead.dRel
+      lead_x = lead.dRel + RADAR_TO_CAMERA
       lead_y = -lead.yRel
       y_limit = 5.0 if lead_type == "ego" else 1.8
       in_box = (x >= lead_x - 1.5) & (x <= lead_x + 5.0) & (y >= lead_y - y_limit) & (y <= lead_y + y_limit)
@@ -889,7 +894,7 @@ class ModelRenderer(Widget):
 
         best_lead_x = None
         for lead_type, lead in active_leads:
-          lead_x = lead.dRel
+          lead_x = lead.dRel + RADAR_TO_CAMERA
           lead_y = -lead.yRel
           y_limit = 5.0 if lead_type == "ego" else 1.8
           if (lead_x - 1.5) <= p_curr[0] <= (lead_x + 5.0) and (lead_y - y_limit) <= p_curr[1] <= (lead_y + y_limit):

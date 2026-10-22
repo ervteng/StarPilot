@@ -1,8 +1,10 @@
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
+from openpilot.selfdrive.controls.radard import RADAR_TO_CAMERA
 from openpilot.selfdrive.ui.mici.onroad.model_renderer import ModelRenderer
 
 
@@ -135,3 +137,20 @@ def test_batched_projection_clips_lines_independently(renderer):
   np.testing.assert_array_equal(polygons[0], [[20, 48], [20, 52]])
   assert polygons[1].shape == (0, 2)
   np.testing.assert_array_equal(polygons[2], [[40, 65], [40, 95]])
+
+
+def test_leads_are_placed_in_camera_frame(renderer):
+  renderer._path = SimpleNamespace(raw_points=np.column_stack((np.arange(0, 100, 1.0), np.zeros(100), np.arange(100) * 0.01)))
+  renderer._path_offset_z = 0.0
+  renderer._rect = SimpleNamespace(x=0, y=0, width=1000, height=800)
+  renderer._map_to_screen = MagicMock(return_value=(500.0, 400.0))
+  renderer._update_lead_vehicle = MagicMock(return_value="lead")
+  lead = SimpleNamespace(status=True, dRel=30.0, yRel=1.0, vRel=-2.0)
+  radar_state = SimpleNamespace(leadOne=lead, leadTwo=SimpleNamespace(status=False))
+
+  renderer._update_leads(radar_state, renderer._path.raw_points[:, 0])
+
+  assert renderer._map_to_screen.call_args.args[0] == pytest.approx(30.0 + RADAR_TO_CAMERA)
+  assert renderer._map_to_screen.call_args.args[2] == pytest.approx(renderer._path.raw_points[31, 2])
+  # size/alpha logic keeps the radar-frame distance
+  assert renderer._update_lead_vehicle.call_args.args[0] == 30.0

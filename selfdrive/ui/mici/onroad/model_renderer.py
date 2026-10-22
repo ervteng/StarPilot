@@ -5,6 +5,7 @@ import pyray as rl
 from cereal import messaging, car
 from dataclasses import dataclass, field
 from openpilot.common.constants import CV
+from openpilot.selfdrive.controls.radard import RADAR_TO_CAMERA
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.selfdrive.controls.lib.lane_centering import get_lane_centering_visual_direction
 from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
@@ -206,11 +207,13 @@ class ModelRenderer(Widget):
     for i, lead_data in enumerate(leads):
       if lead_data and lead_data.status:
         d_rel, y_rel, v_rel = lead_data.dRel, lead_data.yRel, lead_data.vRel
-        idx = self._get_path_length_idx(path_x_array, d_rel)
+        # dRel is radar frame; path and projection are camera frame
+        x_cam = d_rel + RADAR_TO_CAMERA
+        idx = self._get_path_length_idx(path_x_array, x_cam)
 
         # Get z-coordinate from path at the lead vehicle position
         z = self._path.raw_points[idx, 2] if idx < len(self._path.raw_points) else 0.0
-        point = self._map_to_screen(d_rel, -y_rel, z + self._path_offset_z)
+        point = self._map_to_screen(x_cam, -y_rel, z + self._path_offset_z)
         if point:
           self._lead_vehicles[i] = self._update_lead_vehicle(d_rel, v_rel, point, self._rect)
 

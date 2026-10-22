@@ -39,9 +39,12 @@ if "openpilot.selfdrive.ui.ui_state" not in sys.modules:
     ui_state_mod.UIStatus = SimpleNamespace(DISENGAGED=0, ENGAGED=1, OVERRIDE=2)
     sys.modules["openpilot.selfdrive.ui.ui_state"] = ui_state_mod
 
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 
+from openpilot.selfdrive.controls.radard import RADAR_TO_CAMERA
 from openpilot.selfdrive.ui.onroad.model_renderer import ModelRenderer
 
 
@@ -208,3 +211,89 @@ def test_radar_update_decoupled_from_model_regeneration(monkeypatch):
   r._render(rl.Rectangle(0, 0, 100, 100))
   assert r._update_model.called, "Model geometry should reproject when modelV2 updates"
 
+
+
+def _lead_renderer(renderer):
+  renderer._path = SimpleNamespace(raw_points=np.column_stack((np.arange(0, 100, 1.0), np.zeros(100), np.arange(100) * 0.01)))
+  renderer._path_offset_z = 0.0
+  renderer._rect = SimpleNamespace(x=0, y=0, width=1000, height=800)
+  renderer._map_to_screen = MagicMock(return_value=(500.0, 400.0))
+  renderer._update_lead_vehicle = MagicMock(return_value="lead")
+  return renderer
+
+
+def test_leads_are_placed_in_camera_frame(renderer):
+  r = _lead_renderer(renderer)
+  lead = SimpleNamespace(status=True, dRel=30.0, yRel=1.0, vRel=-2.0)
+  radar_state = SimpleNamespace(leadOne=lead, leadTwo=SimpleNamespace(status=False))
+  path_x = r._path.raw_points[:, 0]
+
+  r._update_leads(radar_state, path_x)
+
+  x_cam = 30.0 + RADAR_TO_CAMERA
+  assert r._map_to_screen.call_args.args[0] == pytest.approx(x_cam)
+  # z is looked up at the camera-frame x (index 31, not 30)
+  assert r._map_to_screen.call_args.args[2] == pytest.approx(r._path.raw_points[31, 2])
+  # lead size/alpha logic keeps the radar-frame distance
+  assert r._update_lead_vehicle.call_args.args[0] == 30.0
+
+
+def test_adjacent_leads_are_placed_in_camera_frame(renderer):
+  r = _lead_renderer(renderer)
+  lead = SimpleNamespace(status=True, dRel=20.0, yRel=3.0, vRel=0.0)
+  srs = SimpleNamespace(leadLeft=lead, leadRight=SimpleNamespace(status=False))
+
+  r._update_adjacent_leads(srs, r._path.raw_points[:, 0])
+
+  assert r._map_to_screen.call_args.args[0] == pytest.approx(20.0 + RADAR_TO_CAMERA)
+  # displayed/effective distance stays radar frame
+  assert r._update_lead_vehicle.call_args.args[0] == pytest.approx(23.0)
+
+
+def test_lead_clip_box_uses_camera_frame(renderer):
+  lead = SimpleNamespace(dRel=30.0, yRel=0.0, status=True)
+  points = np.column_stack((np.linspace(0, 60, 61), np.zeros(61), np.zeros(61))).astype(np.float32)
+
+  clipped = renderer._clip_line_by_lead(points, [("ego", lead)])
+
+  # line ends 1.5 m behind the lead's camera-frame x
+  assert clipped[-1, 0] == pytest.approx(30.0 + RADAR_TO_CAMERA - 1.5)
+
+
+def test_radar_dots_project_camera_frame_distance(renderer, monkeypatch):
+  import openpilot.selfdrive.ui.onroad.model_renderer as mr
+
+  class Stop(Exception):
+    pass
+
+  captured = {}
+
+  def fake_project(d_rel, *args):
+    captured["d_rel"] = d_rel.copy()
+    raise Stop
+
+  points = [SimpleNamespace(dRel=10.0, yRel=0.5), SimpleNamespace(dRel=40.0, yRel=-1.0)]
+  monkeypatch.setattr(mr, "project_radar_points", fake_project)
+  monkeypatch.setattr(mr, "ui_state", SimpleNamespace(sm=_FakeSm(points)))
+  renderer._params = SimpleNamespace(get_bool=lambda k: True)
+  renderer._path = SimpleNamespace(raw_points=np.zeros((5, 3)))
+  renderer._rect = SimpleNamespace(x=0, y=0, width=1000, height=800)
+  renderer._path_offset_z = 0.0
+  renderer._radar_path_generation = 0
+  renderer._radar_transform_generation = 0
+  renderer._radar_projection_key = None
+
+  with pytest.raises(Stop):
+    renderer._draw_radar_tracks()
+
+  np.testing.assert_allclose(captured["d_rel"], [10.0 + RADAR_TO_CAMERA, 40.0 + RADAR_TO_CAMERA])
+
+
+class _FakeSm:
+  def __init__(self, points):
+    self.valid = {"liveTracks": True}
+    self.recv_frame = {"liveTracks": 1}
+    self._msg = SimpleNamespace(points=points)
+
+  def __getitem__(self, key):
+    return self._msg
