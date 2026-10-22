@@ -138,14 +138,14 @@ def test_negative_bias_never_plans_inside_the_safe_decel_curve(stinger):
     for d in (5.0, 8.0, 12.0, 20.0, 40.0, 70.0):
       b = bias(stinger, d, v)
       if b < 0.0:
-        safe_gap = v * v / (2 * 3.0) + lvt.KIA_STINGER_2022_STOPPED_LEAD_FINAL_GAP_M
+        safe_gap = v * v / (2 * lvt.KIA_STINGER_2022_STOPPED_LEAD_SAFE_DECEL) + lvt.KIA_STINGER_2022_STOPPED_LEAD_FINAL_GAP_M
         assert mpc_gap(v) + b >= safe_gap - 1e-9
 
 
 def test_late_detection_never_weaker_than_baseline(stinger):
   """Obstacle position handed to the MPC is d_rel - bias (+ stopped-equivalent, ~0); baseline bias is 0."""
   for v in (3.0, 6.0, 9.0, 12.0, 15.0):
-    safe_gap = v * v / (2 * 3.0) + lvt.KIA_STINGER_2022_STOPPED_LEAD_FINAL_GAP_M
+    safe_gap = v * v / (2 * lvt.KIA_STINGER_2022_STOPPED_LEAD_SAFE_DECEL) + lvt.KIA_STINGER_2022_STOPPED_LEAD_FINAL_GAP_M
     for d in (2.0, 4.0, 0.5 * safe_gap, safe_gap - 0.1, safe_gap):
       assert bias(stinger, d, v) >= 0.0, (v, d)
     # fully faded in only well beyond the safe distance
