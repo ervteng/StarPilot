@@ -349,6 +349,16 @@ def always_on_lateral_available(CP) -> bool:
   return getattr(CP, "brand", None) not in ALWAYS_ON_LATERAL_UNSUPPORTED_CAR_MAKES
 
 
+def read_flm_active_overrides(params) -> dict:
+  # FLMActiveOverrides is a JSON param, so Params.get already returns the parsed dict
+  raw = params.get("FLMActiveOverrides")
+  try:
+    value = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+  except Exception:
+    return {}
+  return value if isinstance(value, dict) else {}
+
+
 def get_starpilot_toggles(sm=messaging.SubMaster(["starpilotPlan"]), *, read_persisted_force_params=False):
   toggles_text = sm["starpilotPlan"].starpilotToggles
   if toggles_text:
@@ -794,11 +804,7 @@ class StarPilotVariables:
     toggle.force_auto_tune_off = self.get_value("ForceAutoTuneOff", condition=advanced_lateral_tuning and is_torque_car and not is_angle_car)
     toggle.flm_active_profile_id = self.params.get("FLMActiveProfileId", encoding="utf-8") or ""
     toggle.flm_trial_applied = self.params.get_bool("FLMTrialApplied")
-    flm_overrides_raw = self.params.get("FLMActiveOverrides", encoding="utf-8") or ""
-    try:
-      toggle.flm_active_overrides = json.loads(flm_overrides_raw) if flm_overrides_raw else {}
-    except Exception:
-      toggle.flm_active_overrides = {}
+    toggle.flm_active_overrides = read_flm_active_overrides(self.params)
     toggle.use_auto_steer_delay = self.get_value("UseAutoSteerDelay", condition=advanced_lateral_tuning, default=True)
     toggle.steerActuatorDelay = self.get_value("SteerDelay", cast=float, condition=advanced_lateral_tuning, default=fullSteerActuatorDelay, min=0.01, max=1.0)
     toggle.use_custom_steerActuatorDelay = advanced_lateral_tuning and not toggle.use_auto_steer_delay
