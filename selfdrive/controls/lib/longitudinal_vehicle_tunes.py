@@ -240,6 +240,9 @@ def use_model_lead_filter_sync(CP):
   return (
     getattr(CP, "brand", "") == "toyota" and
     str(getattr(CP, "carFingerprint", "")) == "TOYOTA_COROLLA_TSS2"
+  ) or (
+    getattr(CP, "brand", "") == "hyundai" and
+    str(getattr(CP, "carFingerprint", "")) == "KIA_STINGER_2022"
   )
 
 
