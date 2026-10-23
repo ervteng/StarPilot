@@ -89,11 +89,29 @@ def test_genesis_gv70_scc_accel_preserves_urgent_braking_and_resets():
   assert shape_hyundai_canfd_scc_accel(other, True, False, False, 1.0, 0.0) == 1.0
 
 
-def test_kia_stinger_2022_has_no_planner_entries():
-  # no measured basis for a lead-follow jerk scale or a far-follow slew (analysis/follow_rates.py), so both stay default
+@pytest.mark.parametrize("variant, rates", (("A", (0.0, 0.0)), ("B", (1.5, 2.2)), ("C", (1.5, 2.2))))
+def test_kia_stinger_2022_far_follow_slew_only_for_stock_like_variants(monkeypatch, variant, rates):
+  # no lead-follow jerk scale (no measured basis); the far-follow slew is fit to analysis/follow_rates.py
   stinger = SimpleNamespace(brand="hyundai", carFingerprint="KIA_STINGER_2022", openpilotLongitudinalControl=True)
+  other = SimpleNamespace(brand="hyundai", carFingerprint="KIA_STINGER", openpilotLongitudinalControl=True)
+  monkeypatch.setattr(vehicle_tunes, "testing_ground", SimpleNamespace(use=lambda slot, v="B": slot == "9" and v == variant))
+  monkeypatch.setattr(vehicle_tunes, "_kia_stinger_2022_tune_latch", {})
+
   assert get_lead_follow_jerk_scale(stinger) == 1.0
-  assert vehicle_tunes.get_far_follow_output_slew_rates(stinger) == (0.0, 0.0)
+  assert vehicle_tunes.get_far_follow_output_slew_rates(stinger) == rates
+  assert get_lead_follow_jerk_scale(other) == 1.0
+  assert vehicle_tunes.get_far_follow_output_slew_rates(other) == (0.0, 0.0)
+
+
+def test_kia_stinger_2022_slew_tune_is_latched_at_first_read(monkeypatch):
+  stinger = SimpleNamespace(brand="hyundai", carFingerprint="KIA_STINGER_2022", openpilotLongitudinalControl=True)
+  state = {"variant": "B"}
+  monkeypatch.setattr(vehicle_tunes, "testing_ground", SimpleNamespace(use=lambda slot, v="B": slot == "9" and v == state["variant"]))
+  monkeypatch.setattr(vehicle_tunes, "_kia_stinger_2022_tune_latch", {})
+
+  assert vehicle_tunes.get_far_follow_output_slew_rates(stinger) == (1.5, 2.2)
+  state["variant"] = "A"
+  assert vehicle_tunes.get_far_follow_output_slew_rates(stinger) == (1.5, 2.2)
 
 
 def make_sm(planner, *, frame: int, v_ego: float, left_blinker: bool, right_blinker: bool = False, standstill: bool = False):

@@ -1,5 +1,7 @@
 import numpy as np
 
+from opendbc.car.hyundai.values import KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID, kia_stinger_2022_longitudinal_tuning
+from openpilot.starpilot.common.testing_grounds import testing_ground
 
 HONDA_HRV_3G_FAR_FOLLOW_BRAKE_SLEW_RATE = 3.0
 HONDA_HRV_3G_FAR_FOLLOW_RELEASE_SLEW_RATE = 2.0
@@ -35,6 +37,10 @@ HYUNDAI_CANFD_SCC_FREQUENCY = 50.0
 # analysis/stock_mimic_check.py on 4 factory-ACC drives (262k active samples) unless noted.
 # command -> aEgo lag of the sent accel, 890 s of openpilot-long drives (analysis/accel_lag.py): delay 0.20 + tau 0.30 s
 KIA_STINGER_2022_ACTUATOR_DELAY = 0.5
+# far-follow output slew (analysis/follow_rates.py, change over 0.2 s): factory SCC falling p99 1.15 (aReqRaw) / 1.30 (aReqValue), openpilot 4.16 / 2.35
+KIA_STINGER_2022_FAR_FOLLOW_BRAKE_SLEW_RATE = 1.5
+# factory SCC rising p99 2.17 (aReqRaw) / 0.75 (aReqValue), above openpilot's own rising p99 (1.81 / 1.50), so it rarely binds
+KIA_STINGER_2022_FAR_FOLLOW_RELEASE_SLEW_RATE = 2.2
 KIA_STINGER_2022_SCC_JERK_UPPER = 3.0  # not shaped: today's SCC14 upper jerk
 KIA_STINGER_2022_SCC_JERK_LOWER = 2.5  # factory lower jerk with a lead < 60 m: 2.5 in 94-96% of samples
 KIA_STINGER_2022_SCC_JERK_LOWER_NO_LEAD = 0.5  # factory: 0.5 in 99.7% of no-lead samples
@@ -661,6 +667,22 @@ def get_far_follow_output_slew_min_speed(CP, default_min_speed):
   return default_min_speed
 
 
+_kia_stinger_2022_tune_latch = {}
+
+
+def get_kia_stinger_2022_stock_tune(CP):
+  """Returns "B", "C" or None. Latched on first read so a mid-drive Testing Ground change cannot jump the planner."""
+  if str(getattr(CP, "carFingerprint", "")) != "KIA_STINGER_2022":
+    return None
+  if "tune" not in _kia_stinger_2022_tune_latch:
+    _kia_stinger_2022_tune_latch["tune"] = kia_stinger_2022_longitudinal_tuning(
+      CP.carFingerprint, getattr(CP, "openpilotLongitudinalControl", False),
+      testing_ground.use(KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID, "B"),
+      testing_ground.use(KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID, "C"),
+    )
+  return _kia_stinger_2022_tune_latch["tune"]
+
+
 def get_kia_stinger_2022_scc_jerk_lower(stopping, accel, lead_visible=None, lead_distance=None):
   """Braking-side SCC14 lower jerk of the stock-like Stinger tunes. Without lead info: the lead-braking rate."""
   if stopping or accel <= KIA_STINGER_2022_SCC_URGENT_ACCEL:
@@ -683,6 +705,11 @@ def get_far_follow_output_slew_rates(CP):
     return (
       KIA_NIRO_EV_FAR_FOLLOW_BRAKE_SLEW_RATE,
       KIA_NIRO_EV_FAR_FOLLOW_RELEASE_SLEW_RATE,
+    )
+  if get_kia_stinger_2022_stock_tune(CP) is not None:
+    return (
+      KIA_STINGER_2022_FAR_FOLLOW_BRAKE_SLEW_RATE,
+      KIA_STINGER_2022_FAR_FOLLOW_RELEASE_SLEW_RATE,
     )
   if CP.brand == "honda" and str(CP.carFingerprint) == "HONDA_ACCORD":
     return (

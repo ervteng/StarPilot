@@ -4407,3 +4407,59 @@ def test_near_duplicate_lead_source_hysteresis_skips_distinct_leads():
 
   assert lead_0_bias == 0.0
   assert lead_1_bias == 0.0
+
+
+def make_stinger_slew_planner(monkeypatch, variant="B"):
+  import openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes as vehicle_tunes
+  monkeypatch.setattr(vehicle_tunes, "testing_ground", SimpleNamespace(use=lambda slot, v="B": slot == "9" and v == variant))
+  monkeypatch.setattr(vehicle_tunes, "_kia_stinger_2022_tune_latch", {})
+  CP = HyundaiCarInterface.get_non_essential_params(HYUNDAI_CAR.KIA_STINGER_2022)
+  CP.openpilotLongitudinalControl = True
+  planner = LongitudinalPlanner(CP, init_v=28.0)
+  planner.lead_one = make_lead(status=True, d_rel=60.0, v_lead=27.0, model_prob=0.99, y_rel=0.0)
+  planner.lead_two = make_lead(status=False)
+  return planner
+
+
+@pytest.mark.parametrize("variant", ("B", "C"))
+def test_stinger_2022_far_follow_brake_slew_limits_step_to_1_5(monkeypatch, variant):
+  planner = make_stinger_slew_planner(monkeypatch, variant)
+  assert (planner.far_follow_brake_slew_rate, planner.far_follow_release_slew_rate) == pytest.approx((1.5, 2.2))
+
+  first = planner.get_vehicle_far_follow_slew_target(28.0, 0.0, -0.4, False, False)  # first active cycle passes through
+  assert first == pytest.approx(-0.4)
+  stepped = planner.get_vehicle_far_follow_slew_target(28.0, first, -2.0, False, False)
+  assert stepped == pytest.approx(-0.4 - 1.5 * planner.dt)
+  released = planner.get_vehicle_far_follow_slew_target(28.0, stepped, 1.0, False, False)
+  assert released == pytest.approx(stepped + 2.2 * planner.dt)
+
+
+def test_stinger_2022_slot_a_far_follow_slew_is_off(monkeypatch):
+  planner = make_stinger_slew_planner(monkeypatch, "A")
+  assert (planner.far_follow_brake_slew_rate, planner.far_follow_release_slew_rate) == (0.0, 0.0)
+  planner.get_vehicle_far_follow_slew_target(28.0, 0.0, -0.4, False, False)
+  assert planner.get_vehicle_far_follow_slew_target(28.0, -0.4, -2.0, False, False) == pytest.approx(-2.0)
+
+
+def test_stinger_2022_far_follow_brake_slew_does_not_limit_urgent_cases(monkeypatch):
+  planner = make_stinger_slew_planner(monkeypatch)
+  planner.get_vehicle_far_follow_slew_target(28.0, 0.0, -0.4, False, False)
+  assert planner.get_vehicle_far_follow_slew_target(28.0, -0.4, -2.0, False, False) != pytest.approx(-2.0)
+  assert planner.far_follow_output_slew_active
+
+  # panic_bypass and output_should_stop bypass the limit
+  assert planner.get_vehicle_far_follow_slew_target(28.0, -0.4, -2.0, False, True) == pytest.approx(-2.0)
+  assert not planner.far_follow_output_slew_active
+  planner.get_vehicle_far_follow_slew_target(28.0, 0.0, -0.4, False, False)
+  planner.get_vehicle_far_follow_slew_target(28.0, -0.4, -0.4, False, False)
+  assert planner.far_follow_output_slew_active
+  assert planner.get_vehicle_far_follow_slew_target(28.0, -0.4, -2.0, True, False) == pytest.approx(-2.0)
+  assert not planner.far_follow_output_slew_active
+
+  # TTC < 8 s: 60 m at 28 m/s closing on a 20 m/s lead is 7.5 s
+  planner.get_vehicle_far_follow_slew_target(28.0, 0.0, -0.4, False, False)
+  planner.get_vehicle_far_follow_slew_target(28.0, -0.4, -0.4, False, False)
+  assert planner.far_follow_output_slew_active
+  planner.lead_one.vLead = 20.0
+  assert planner.get_vehicle_far_follow_slew_target(28.0, -0.4, -2.0, False, False) == pytest.approx(-2.0)
+  assert not planner.far_follow_output_slew_active
