@@ -646,14 +646,15 @@ class LongitudinalMpc:
     if lead_active:
       model_lead_xv = build_model_lead_trajectory(model_lead, lead, v_ego)
       if model_lead_xv is not None:
+        # The raw path reads these filters when it takes over, so keep them current for every car.
+        a_lead = soften_far_radar_lead_accel(
+          lead.dRel, lead.vLead, lead.aLeadK, v_ego,
+          get_T_FOLLOW() if t_follow is None else t_follow,
+          radar=bool(getattr(lead, "radar", False)),
+        )
+        self.lead_a_filter.update(float(np.clip(a_lead, -10., 5.)))
+        self.lead_v_filter.update(float(np.clip(lead.vLead, 0.0, 1e8)))
         if self.sync_model_lead_filters:
-          a_lead = soften_far_radar_lead_accel(
-            lead.dRel, lead.vLead, lead.aLeadK, v_ego,
-            get_T_FOLLOW() if t_follow is None else t_follow,
-            radar=bool(getattr(lead, "radar", False)),
-          )
-          self.lead_a_filter.update(float(np.clip(a_lead, -10., 5.)))
-          self.lead_v_filter.update(float(np.clip(lead.vLead, 0.0, 1e8)))
           for lead_filter in (self.duplicate_lead_x_filters[lead_index],
                               self.duplicate_lead_a_filters[lead_index],
                               self.duplicate_lead_v_filters[lead_index]):
