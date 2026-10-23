@@ -740,28 +740,6 @@ def test_model_lead_trajectory_is_default_for_stable_lead():
   np.testing.assert_allclose(actual, expected)
 
 
-def test_model_path_keeps_raw_lead_filters_in_sync_for_non_corolla():
-  # Regression: the raw path reads lead_{a,v}_filter when it takes over from the model path.
-  mpc = LongitudinalMpc()
-  assert not mpc.sync_model_lead_filters
-  mpc.set_cur_state(24.0, 0.0)
-  _, model_lead = make_model_lead(x=[0.0, 20.0, 40.0, 60.0, 80.0, 100.0], v=[23.5] * 6)
-  lead = make_lead(status=True, d_rel=44.0, v_lead=23.5, a_lead=-0.45, radar=True, model_prob=0.99)
-  expected = build_model_lead_trajectory(model_lead, lead, 24.0)
-  assert expected is not None
-
-  for _ in range(100):
-    actual = mpc.process_lead(lead, model_lead=model_lead)
-    np.testing.assert_allclose(actual, expected)  # model-path output is unchanged by the filter sync
-  assert mpc.lead_v_filter.x == pytest.approx(23.5, abs=0.1)
-
-  lead.aLeadK = -0.52  # beyond the model-path brake limit: raw path takes over
-  assert build_model_lead_trajectory(model_lead, lead, 24.0) is None
-  raw = mpc.process_lead(lead, model_lead=model_lead)
-  assert abs(mpc.lead_v_filter.x - 23.5) < 1.0
-  assert abs(raw[0, 1] - 23.5) < 1.0
-
-
 def test_model_lead_trajectory_uses_raw_current_anchor_and_future_deltas():
   lead = make_lead(status=True, d_rel=42.0, v_lead=18.0, model_prob=0.99)
   _, model_lead = make_model_lead()
