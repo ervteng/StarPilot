@@ -1,5 +1,10 @@
 import numpy as np
 
+from opendbc.car.hyundai.values import KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID, kia_stinger_2022_longitudinal_tuning
+from openpilot.common.constants import CV
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS, T_DIFFS
+from openpilot.starpilot.common.testing_grounds import testing_ground
+
 
 HONDA_HRV_3G_FAR_FOLLOW_BRAKE_SLEW_RATE = 3.0
 HONDA_HRV_3G_FAR_FOLLOW_RELEASE_SLEW_RATE = 2.0
@@ -49,6 +54,13 @@ KIA_STINGER_2022_SCC_BRAKING_JERK_LOWER_ACCEL = -0.5
 # above 2.8 (0.1% of samples) with a median aReqRaw of -2.3, and never above 5.8.
 KIA_STINGER_2022_SCC_URGENT_JERK_LOWER = 5.0
 KIA_STINGER_2022_SCC_URGENT_ACCEL = -1.0
+# Task 4b: Kia Stinger 2022 Tune B lead-braking and decay tuning constants (Testing Ground slot 9, variant B).
+KIA_STINGER_2022_DYNAMIC_T_FOLLOW_GIVE_UP = 0.22
+KIA_STINGER_2022_DYNAMIC_T_FOLLOW_MIN_FLOOR = 0.95
+KIA_STINGER_2022_CLOSE_LEAD_BRAKE_CAP_MAX_TTC = 5.0
+KIA_STINGER_2022_EXTRAPOLATE_LEAD_MIN_TAU = 1.2
+KIA_STINGER_2022_HIGHWAY_SPEED_MIN = 16.0
+KIA_STINGER_2022_HIGHWAY_SPEED_MAX = 18.0
 FORD_LIGHTNING_LEAD_FOLLOW_JERK_SCALE = 1.35
 HONDA_CRV_5G_LEAD_FOLLOW_JERK_SCALE = 1.35
 GM_SILVERADO_EARLY_FOLLOW_MIN_EGO_SPEED = 18.0
@@ -233,6 +245,9 @@ def use_stopped_lead_position(CP):
   return (
     getattr(CP, "brand", "") == "toyota" and
     str(getattr(CP, "carFingerprint", "")) == "TOYOTA_COROLLA_TSS2"
+  ) or (
+    getattr(CP, "brand", "") == "hyundai" and
+    str(getattr(CP, "carFingerprint", "")) == "KIA_STINGER_2022"
   )
 
 
@@ -753,6 +768,108 @@ def get_far_follow_output_slew_min_speed(CP, default_min_speed):
   if getattr(CP, "brand", "") == "hyundai" and str(getattr(CP, "carFingerprint", "")) == "KIA_NIRO_EV":
     return 5.0
   return default_min_speed
+
+
+_kia_stinger_2022_tune_latch = {}
+
+
+def get_kia_stinger_2022_stock_tune(CP):
+  """Returns "B", "C" or None. Latched on first read so a mid-drive Testing Ground change cannot jump the planner."""
+  if str(getattr(CP, "carFingerprint", "")) != "KIA_STINGER_2022":
+    return None
+  if "tune" not in _kia_stinger_2022_tune_latch:
+    _kia_stinger_2022_tune_latch["tune"] = kia_stinger_2022_longitudinal_tuning(
+      CP.carFingerprint, getattr(CP, "openpilotLongitudinalControl", False),
+      testing_ground.use(KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID, "B"),
+      testing_ground.use(KIA_STINGER_2022_LONG_TUNING_TESTING_GROUND_ID, "C"),
+    )
+  return _kia_stinger_2022_tune_latch["tune"]
+
+
+def get_kia_stinger_2022_extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau, v_ego=0.0, *, hold_stopped_lead_position=False):
+  speed_mph = float(v_ego) * CV.MS_TO_MPH
+  bp = [0, 20, 35]
+  orig_exp_weight = float(np.interp(speed_mph, bp, [1.0, 1.0, 0.0]))
+
+  v_lead_traj_const = np.clip(v_lead + a_lead * T_IDXS, 0.0, 1e8)
+  position_time = T_IDXS
+  if hold_stopped_lead_position and a_lead < 0.0:
+    position_time = np.minimum(T_IDXS, max(v_lead, 0.0) / -a_lead)
+  x_lead_traj_const = x_lead + v_lead * position_time + 0.5 * a_lead * position_time**2
+
+  if orig_exp_weight > 0:
+    a_lead_traj_exp_orig = a_lead * np.exp(-a_lead_tau * (T_IDXS**2) / 2.0)
+    v_lead_traj_exp_orig = np.clip(v_lead + np.cumsum(T_DIFFS * a_lead_traj_exp_orig), 0.0, 1e8)
+    x_lead_traj_exp_orig = x_lead + np.cumsum(T_DIFFS * v_lead_traj_exp_orig)
+  else:
+    x_lead_traj_exp_orig = np.zeros_like(T_IDXS)
+    v_lead_traj_exp_orig = np.zeros_like(T_IDXS)
+
+  v_upstream = orig_exp_weight * v_lead_traj_exp_orig + (1.0 - orig_exp_weight) * v_lead_traj_const
+  x_upstream = orig_exp_weight * x_lead_traj_exp_orig + (1.0 - orig_exp_weight) * x_lead_traj_const
+
+  lead_brake = max(0.0, -float(a_lead))
+  closing_speed = max(0.0, float(v_ego) - float(v_lead))
+  ttc = float(x_lead) / max(closing_speed, 0.1) if closing_speed > 0.1 else 99.0
+  headway = float(x_lead) / max(float(v_ego), 0.1)
+
+  v_ego_fade = float(np.clip((v_ego - KIA_STINGER_2022_HIGHWAY_SPEED_MIN) /
+                             (KIA_STINGER_2022_HIGHWAY_SPEED_MAX - KIA_STINGER_2022_HIGHWAY_SPEED_MIN), 0.0, 1.0))
+  v_lead_fade = float(np.clip((v_lead - 4.0) / (6.0 - 4.0), 0.0, 1.0))
+  ttc_fade = float(np.clip((ttc - 4.0) / (6.0 - 4.0), 0.0, 1.0))
+  emerg_fade = float(np.clip((3.5 - lead_brake) / (3.5 - 2.8), 0.0, 1.0)) if headway < 1.8 else 1.0
+  closing_fade = float(np.clip((5.0 - closing_speed) / (5.0 - 2.5), 0.25, 1.0))
+  decay_fade = v_ego_fade * v_lead_fade * ttc_fade * emerg_fade * closing_fade
+
+  eff_tau = max(float(a_lead_tau), KIA_STINGER_2022_EXTRAPOLATE_LEAD_MIN_TAU)
+  a_exp_tuneb = a_lead * np.exp(-eff_tau * (T_IDXS**2) / 2.0)
+  v_exp_tuneb = np.clip(v_lead + np.cumsum(T_DIFFS * a_exp_tuneb), 0.0, 1e8)
+  x_exp_tuneb = x_lead + np.cumsum(T_DIFFS * v_exp_tuneb)
+
+  v_lead_traj = decay_fade * v_exp_tuneb + (1.0 - decay_fade) * v_upstream
+  x_lead_traj = decay_fade * x_exp_tuneb + (1.0 - decay_fade) * x_upstream
+  return np.column_stack((x_lead_traj, v_lead_traj))
+
+
+def get_kia_stinger_2022_close_lead_brake_cap_max_ttc(CP, lead, v_ego, projected_ttc):
+  if get_kia_stinger_2022_stock_tune(CP) != "B":
+    return None
+  lead_brake = max(0.0, -float(getattr(lead, "aLeadK", 0.0)))
+  headway = float(lead.dRel) / max(float(v_ego), 0.1)
+  if float(v_ego) >= KIA_STINGER_2022_HIGHWAY_SPEED_MIN:
+    if lead_brake >= 3.2 and (headway <= 1.85 or projected_ttc <= 10.0):
+      return 25.0
+    elif headway <= 1.85 or projected_ttc <= 10.0:
+      return float(np.interp(lead_brake, [2.8, 3.2], [KIA_STINGER_2022_CLOSE_LEAD_BRAKE_CAP_MAX_TTC, 25.0]))
+    else:
+      return float(np.interp(v_ego, [KIA_STINGER_2022_HIGHWAY_SPEED_MIN, KIA_STINGER_2022_HIGHWAY_SPEED_MAX],
+                             [25.0, KIA_STINGER_2022_CLOSE_LEAD_BRAKE_CAP_MAX_TTC]))
+  return 25.0
+
+
+def get_kia_stinger_2022_dynamic_t_follow(CP, base_t_follow, lead, v_ego, target_delta):
+  """Returns (target_t_follow, floor_limit) for Kia Stinger 2022 Tune B, or (None, None)."""
+  if get_kia_stinger_2022_stock_tune(CP) != "B":
+    return None, None
+  if lead is None or not getattr(lead, "status", False):
+    return None, None
+  lead_brake = max(0.0, -float(getattr(lead, "aLeadK", 0.0)))
+  closing_speed = max(0.0, float(v_ego) - float(lead.vLead))
+  ttc = float(lead.dRel) / max(closing_speed, 0.1) if closing_speed > 0.1 else 99.0
+
+  v_ego_fade = float(np.clip((v_ego - KIA_STINGER_2022_HIGHWAY_SPEED_MIN) /
+                             (KIA_STINGER_2022_HIGHWAY_SPEED_MAX - KIA_STINGER_2022_HIGHWAY_SPEED_MIN), 0.0, 1.0))
+  ttc_fade = float(np.clip((ttc - 4.0) / (6.0 - 4.0), 0.0, 1.0))
+  severity_fade = float(np.clip((3.0 - lead_brake) / (3.0 - 2.0), 0.0, 1.0))
+  give_up_brake_factor = float(np.clip((lead_brake - 0.2) / (1.5 - 0.2), 0.0, 1.0)) if lead_brake >= 0.2 else float(np.clip(closing_speed / 1.0, 0.0, 1.0))
+  fade = v_ego_fade * ttc_fade * severity_fade
+
+  give_up = KIA_STINGER_2022_DYNAMIC_T_FOLLOW_GIVE_UP * give_up_brake_factor
+  floor_tf = min(base_t_follow, KIA_STINGER_2022_DYNAMIC_T_FOLLOW_MIN_FLOOR)
+  target_tf_tuneb = max(floor_tf, base_t_follow - give_up)
+  upstream_target = base_t_follow + float(target_delta)
+  target_t_follow = fade * target_tf_tuneb + (1.0 - fade) * upstream_target
+  return target_t_follow, floor_tf
 
 
 def get_kia_stinger_2022_scc_jerk_lower(stopping, accel, lead_visible=None, lead_distance=None):

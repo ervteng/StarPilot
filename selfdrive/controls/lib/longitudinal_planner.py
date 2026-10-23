@@ -43,6 +43,10 @@ from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import (
   is_toyota_corolla_early_radar_follow_lead,
   use_stopped_lead_position,
   use_model_lead_filter_sync,
+  get_kia_stinger_2022_stock_tune,
+  get_kia_stinger_2022_extrapolate_lead,
+  get_kia_stinger_2022_close_lead_brake_cap_max_ttc,
+  get_kia_stinger_2022_dynamic_t_follow,
   is_toyota_rav4_tss2_radar_follow_lead,
   get_toyota_sienna_post_departure_restop_cap,
   get_untracked_slow_lead_decel_scale,
@@ -573,6 +577,8 @@ class LongitudinalPlanner:
     self.CP = CP
     self.mpc = LongitudinalMpc(dt=dt, hold_stopped_lead_position=use_stopped_lead_position(CP),
                               sync_model_lead_filters=use_model_lead_filter_sync(CP))
+    if get_kia_stinger_2022_stock_tune(CP) == "B":
+      self.mpc.extrapolate_lead = get_kia_stinger_2022_extrapolate_lead
     self.fcw = False
     self.dt = dt
     self.model_allow_throttle = True
@@ -754,7 +760,9 @@ class LongitudinalPlanner:
     delay_buffer = projected_closing_speed * reaction_t
     available_gap = max(float(lead.dRel) - target_gap - delay_buffer, 0.5)
     projected_ttc = available_gap / max(projected_closing_speed, 0.1)
-    if projected_ttc > CLOSE_LEAD_BRAKE_CAP_MAX_TTC:
+    stinger_max_ttc = get_kia_stinger_2022_close_lead_brake_cap_max_ttc(self.CP, lead, v_ego, projected_ttc)
+    max_ttc = CLOSE_LEAD_BRAKE_CAP_MAX_TTC if stinger_max_ttc is None else stinger_max_ttc
+    if projected_ttc > max_ttc:
       return None
     required_decel = (projected_closing_speed ** 2) / (2.0 * available_gap) + 0.7 * lead_brake
     if required_decel < 0.2:
@@ -1083,6 +1091,7 @@ class LongitudinalPlanner:
   def get_dynamic_t_follow(self, base_t_follow, lead, v_ego):
     base_t_follow = float(base_t_follow)
     target_t_follow = base_t_follow
+    target_delta = 0.0
 
     if lead is not None and lead.status:
       lead_prob = float(getattr(lead, "modelProb", 1.0 if bool(getattr(lead, "radar", False)) else 0.0))
@@ -1116,13 +1125,20 @@ class LongitudinalPlanner:
               target_delta += vision_extra
             target_t_follow = base_t_follow + float(target_delta)
 
+    stinger_target_tf, stinger_floor = get_kia_stinger_2022_dynamic_t_follow(
+      self.CP, base_t_follow, lead, v_ego, target_delta
+    )
+    if stinger_target_tf is not None:
+      target_t_follow = stinger_target_tf
+
     if self.effective_t_follow is None:
       self.effective_t_follow = base_t_follow
 
     rate = LEAD_APPROACH_TFOLLOW_RATE_UP if target_t_follow > self.effective_t_follow else LEAD_APPROACH_TFOLLOW_RATE_DOWN
     step = rate * self.dt
     self.effective_t_follow = float(np.clip(target_t_follow, self.effective_t_follow - step, self.effective_t_follow + step))
-    self.effective_t_follow = max(base_t_follow, self.effective_t_follow)
+    floor_limit = base_t_follow if stinger_floor is None else stinger_floor
+    self.effective_t_follow = max(floor_limit, self.effective_t_follow)
     return self.effective_t_follow
 
   def get_vision_low_speed_stop_buffer_cap(self, lead, v_ego, accel_min):

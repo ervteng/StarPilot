@@ -39,6 +39,11 @@ from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import (
   get_far_follow_output_slew_rates,
   get_follow_prebrake_min_headway,
   use_model_lead_filter_sync,
+  use_stopped_lead_position,
+  get_kia_stinger_2022_stock_tune,
+  get_kia_stinger_2022_extrapolate_lead,
+  get_kia_stinger_2022_close_lead_brake_cap_max_ttc,
+  get_kia_stinger_2022_dynamic_t_follow,
   get_honda_accord_lead_departure_tune,
   get_honda_accord_stop_go_accel_cap,
   get_honda_crv_5g_stopped_lead_obstacle_bias,
@@ -750,6 +755,123 @@ def test_use_model_lead_filter_sync_is_corolla_and_stinger_2022_only():
   assert not use_model_lead_filter_sync(cp("hyundai", "KIA_STINGER"))
   assert not use_model_lead_filter_sync(cp("hyundai", "KIA_NIRO_EV"))
   assert not use_model_lead_filter_sync(cp("toyota", "TOYOTA_PRIUS"))
+
+
+def test_use_stopped_lead_position_is_corolla_and_stinger_2022_only():
+  def cp(brand, fingerprint):
+    return SimpleNamespace(brand=brand, carFingerprint=fingerprint)
+
+  assert use_stopped_lead_position(cp("toyota", "TOYOTA_COROLLA_TSS2"))
+  assert use_stopped_lead_position(cp("hyundai", "KIA_STINGER_2022"))
+  assert not use_stopped_lead_position(cp("hyundai", "KIA_STINGER"))
+  assert not use_stopped_lead_position(cp("hyundai", "KIA_NIRO_EV"))
+  assert not use_stopped_lead_position(cp("toyota", "TOYOTA_PRIUS"))
+
+
+def test_kia_stinger_2022_stock_tune_gating(monkeypatch):
+  import openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes as vehicle_tunes
+  stinger = SimpleNamespace(brand="hyundai", carFingerprint="KIA_STINGER_2022", openpilotLongitudinalControl=True)
+  other = SimpleNamespace(brand="hyundai", carFingerprint="KIA_STINGER", openpilotLongitudinalControl=True)
+
+  # Variant B
+  monkeypatch.setattr(vehicle_tunes, "testing_ground", SimpleNamespace(use=lambda slot, v="B": slot == "9" and v == "B"))
+  monkeypatch.setattr(vehicle_tunes, "_kia_stinger_2022_tune_latch", {})
+  assert get_kia_stinger_2022_stock_tune(stinger) == "B"
+  assert get_kia_stinger_2022_stock_tune(other) is None
+
+  # Variant C
+  monkeypatch.setattr(vehicle_tunes, "testing_ground", SimpleNamespace(use=lambda slot, v="B": slot == "9" and v == "C"))
+  monkeypatch.setattr(vehicle_tunes, "_kia_stinger_2022_tune_latch", {})
+  assert get_kia_stinger_2022_stock_tune(stinger) == "C"
+  assert get_kia_stinger_2022_stock_tune(other) is None
+
+  # Variant A (installed tune, inactive)
+  monkeypatch.setattr(vehicle_tunes, "testing_ground", SimpleNamespace(use=lambda slot, v="B": False))
+  monkeypatch.setattr(vehicle_tunes, "_kia_stinger_2022_tune_latch", {})
+  assert get_kia_stinger_2022_stock_tune(stinger) is None
+
+
+def test_kia_stinger_2022_tune_b_planner_wiring(monkeypatch):
+  import openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes as vehicle_tunes
+  stinger = SimpleNamespace(brand="hyundai", carFingerprint="KIA_STINGER_2022", openpilotLongitudinalControl=True,
+                            longitudinalActuatorDelay=0.5, pcmCruise=False)
+  other = SimpleNamespace(brand="toyota", carFingerprint="TOYOTA_COROLLA_TSS2", openpilotLongitudinalControl=True,
+                          longitudinalActuatorDelay=0.2, pcmCruise=False)
+
+  # When Tune B is active
+  monkeypatch.setattr(vehicle_tunes, "testing_ground", SimpleNamespace(use=lambda slot, v="B": slot == "9" and v == "B"))
+  monkeypatch.setattr(vehicle_tunes, "_kia_stinger_2022_tune_latch", {})
+  planner_b = LongitudinalPlanner(stinger)
+  assert planner_b.mpc.hold_stopped_lead_position is True
+  assert planner_b.mpc.extrapolate_lead == get_kia_stinger_2022_extrapolate_lead
+
+  # Non-Stinger remains default
+  planner_other = LongitudinalPlanner(other)
+  assert planner_other.mpc.extrapolate_lead != get_kia_stinger_2022_extrapolate_lead
+
+  # When Tune A is active on Stinger
+  monkeypatch.setattr(vehicle_tunes, "testing_ground", SimpleNamespace(use=lambda slot, v="B": False))
+  monkeypatch.setattr(vehicle_tunes, "_kia_stinger_2022_tune_latch", {})
+  planner_a = LongitudinalPlanner(stinger)
+  assert planner_a.mpc.extrapolate_lead != get_kia_stinger_2022_extrapolate_lead
+
+
+def test_kia_stinger_2022_tune_b_highway_extrapolate_lead(monkeypatch):
+  # Moderate lead braking at 25 m/s: Tune B uses exponential decay with eff_tau >= 1.2
+  lead_xv_tuneb = get_kia_stinger_2022_extrapolate_lead(x_lead=50.0, v_lead=24.0, a_lead=-1.5, a_lead_tau=0.0, v_ego=25.0)
+  lead_xv_default = LongitudinalMpc.extrapolate_lead(x_lead=50.0, v_lead=24.0, a_lead=-1.5, a_lead_tau=0.0, v_ego=25.0)
+
+  # Under constant decel (default), lead speed at horizon (10s) is 24 - 1.5*10 = 9.0 m/s
+  # Under exponential decay (Tune B), lead deceleration decays, so lead speed at horizon is higher (~22.5 m/s)
+  assert lead_xv_default[-1, 1] == pytest.approx(9.0, abs=0.1)
+  assert lead_xv_tuneb[-1, 1] > 20.0
+
+  # Low speed (< 16 m/s): Tune B matches default
+  lead_xv_low_tuneb = get_kia_stinger_2022_extrapolate_lead(x_lead=20.0, v_lead=10.0, a_lead=-1.5, a_lead_tau=0.0, v_ego=10.0, hold_stopped_lead_position=True)
+  lead_xv_low_default = LongitudinalMpc.extrapolate_lead(x_lead=20.0, v_lead=10.0, a_lead=-1.5, a_lead_tau=0.0, v_ego=10.0, hold_stopped_lead_position=True)
+  np.testing.assert_allclose(lead_xv_low_tuneb, lead_xv_low_default)
+
+
+def test_kia_stinger_2022_tune_b_close_lead_brake_cap(monkeypatch):
+  import openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes as vehicle_tunes
+  stinger = SimpleNamespace(brand="hyundai", carFingerprint="KIA_STINGER_2022", openpilotLongitudinalControl=True)
+  other = SimpleNamespace(brand="toyota", carFingerprint="TOYOTA_PRIUS", openpilotLongitudinalControl=True)
+
+  monkeypatch.setattr(vehicle_tunes, "testing_ground", SimpleNamespace(use=lambda slot, v="B": slot == "9" and v == "B"))
+  monkeypatch.setattr(vehicle_tunes, "_kia_stinger_2022_tune_latch", {})
+
+  lead_mod = make_lead(status=True, d_rel=45.0, v_lead=24.0, a_lead=-1.5, radar=True)
+  lead_emerg = make_lead(status=True, d_rel=40.0, v_lead=20.0, a_lead=-3.5, radar=True)
+
+  # Moderate lead braking on highway (25 m/s): Tune B limits max_ttc to 5.0 s
+  assert get_kia_stinger_2022_close_lead_brake_cap_max_ttc(stinger, lead_mod, 25.0, projected_ttc=8.0) == 5.0
+  # Emergency braking: ramps max_ttc back up to 25.0 s
+  assert get_kia_stinger_2022_close_lead_brake_cap_max_ttc(stinger, lead_emerg, 25.0, projected_ttc=8.0) == 25.0
+  # Non-Stinger or non-Tune B returns None
+  assert get_kia_stinger_2022_close_lead_brake_cap_max_ttc(other, lead_mod, 25.0, projected_ttc=8.0) is None
+
+
+def test_kia_stinger_2022_tune_b_dynamic_t_follow(monkeypatch):
+  import openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes as vehicle_tunes
+  stinger = SimpleNamespace(brand="hyundai", carFingerprint="KIA_STINGER_2022", openpilotLongitudinalControl=True,
+                            longitudinalActuatorDelay=0.5, pcmCruise=False)
+  other = SimpleNamespace(brand="toyota", carFingerprint="TOYOTA_PRIUS", openpilotLongitudinalControl=True,
+                          longitudinalActuatorDelay=0.2, pcmCruise=False)
+
+  monkeypatch.setattr(vehicle_tunes, "testing_ground", SimpleNamespace(use=lambda slot, v="B": slot == "9" and v == "B"))
+  monkeypatch.setattr(vehicle_tunes, "_kia_stinger_2022_tune_latch", {})
+
+  planner_b = LongitudinalPlanner(stinger)
+  lead = make_lead(status=True, d_rel=42.0, v_lead=24.0, a_lead=-1.5, radar=True)
+
+  # On highway (25 m/s) with moderate lead braking: Tune B gives up headway below base_t_follow
+  tf_tuneb = planner_b.get_dynamic_t_follow(1.45, lead, 25.0)
+  assert tf_tuneb < 1.45
+
+  # Non-Stinger never drops below base_t_follow
+  planner_other = LongitudinalPlanner(other)
+  tf_other = planner_other.get_dynamic_t_follow(1.45, lead, 25.0)
+  assert tf_other >= 1.45
 
 
 def test_model_path_keeps_raw_lead_filters_in_sync_for_stinger_2022():
