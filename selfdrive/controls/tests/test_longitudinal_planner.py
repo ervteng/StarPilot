@@ -38,6 +38,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import (
   allow_radar_standstill_gap_settle,
   get_far_follow_output_slew_rates,
   get_follow_prebrake_min_headway,
+  use_model_lead_filter_sync,
   get_honda_accord_lead_departure_tune,
   get_honda_accord_stop_go_accel_cap,
   get_honda_crv_5g_stopped_lead_obstacle_bias,
@@ -738,6 +739,40 @@ def test_model_lead_trajectory_is_default_for_stable_lead():
   actual = mpc.process_lead(lead, model_lead=model_lead)
   expected = build_model_lead_trajectory(model_lead, lead, 20.0)
   np.testing.assert_allclose(actual, expected)
+
+
+def test_use_model_lead_filter_sync_is_corolla_and_stinger_2022_only():
+  def cp(brand, fingerprint):
+    return SimpleNamespace(brand=brand, carFingerprint=fingerprint)
+
+  assert use_model_lead_filter_sync(cp("toyota", "TOYOTA_COROLLA_TSS2"))
+  assert use_model_lead_filter_sync(cp("hyundai", "KIA_STINGER_2022"))
+  assert not use_model_lead_filter_sync(cp("hyundai", "KIA_STINGER"))
+  assert not use_model_lead_filter_sync(cp("hyundai", "KIA_NIRO_EV"))
+  assert not use_model_lead_filter_sync(cp("toyota", "TOYOTA_PRIUS"))
+
+
+def test_model_path_keeps_raw_lead_filters_in_sync_for_stinger_2022():
+  # Regression: the raw path reads lead_{a,v}_filter when it takes over from the model path.
+  sync = use_model_lead_filter_sync(SimpleNamespace(brand="hyundai", carFingerprint="KIA_STINGER_2022"))
+  mpc = LongitudinalMpc(sync_model_lead_filters=sync)
+  assert mpc.sync_model_lead_filters
+  mpc.set_cur_state(24.0, 0.0)
+  _, model_lead = make_model_lead(x=[0.0, 20.0, 40.0, 60.0, 80.0, 100.0], v=[23.5] * 6)
+  lead = make_lead(status=True, d_rel=44.0, v_lead=23.5, a_lead=-0.45, radar=True, model_prob=0.99)
+  expected = build_model_lead_trajectory(model_lead, lead, 24.0)
+  assert expected is not None
+
+  for _ in range(100):
+    actual = mpc.process_lead(lead, model_lead=model_lead)
+    np.testing.assert_allclose(actual, expected)
+  assert mpc.lead_v_filter.x == pytest.approx(23.5, abs=0.1)
+
+  lead.aLeadK = -0.52  # beyond the model-path brake limit: raw path takes over
+  assert build_model_lead_trajectory(model_lead, lead, 24.0) is None
+  raw = mpc.process_lead(lead, model_lead=model_lead)
+  assert abs(mpc.lead_v_filter.x - 23.5) < 1.0
+  assert abs(raw[0, 1] - 23.5) < 1.0
 
 
 def test_model_lead_trajectory_uses_raw_current_anchor_and_future_deltas():
