@@ -262,12 +262,9 @@ class RadarInterface(RadarInterfaceBase):
         self.track_id += 1
         self.pts[object_id] = pt
 
-      pt.deprecated.measured = True  # aRel/yvRel/measured live in the deprecated group on this schema
       pt.dRel = obj.distance
       pt.yRel = -obj.lateral_raw  # in car frame's y axis, left is positive
       pt.vRel = obj.relative_speed(self.v_ego)
-      pt.deprecated.aRel = float("nan")
-      pt.deprecated.yvRel = float("nan")
 
     # tracks not seen this cycle are dropped
     for oid in list(self.pts.keys()):

@@ -1,4 +1,3 @@
-import math
 
 import pytest
 
@@ -129,8 +128,6 @@ class TestStingerRadar:
     assert not radar_data.errors.canError
     assert len(radar_data.points) == 1
     pt = radar_data.points[0]
-    assert pt.deprecated.measured
-    assert math.isnan(pt.deprecated.aRel) and math.isnan(pt.deprecated.yvRel)
     assert pt.dRel == pytest.approx(10.85)
     assert pt.yRel == pytest.approx(0.2)  # left-positive in the car frame: -lateral_raw
     v_ego = 50.0 * (1000.0 / 3600.0)
