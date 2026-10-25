@@ -24,7 +24,7 @@ from opendbc.car.hyundai.ioniq6_bsm import Ioniq6BlindspotSources
 from opendbc.car.hyundai.ray_pedal import ray_pedal_enabled
 from opendbc.car.hyundai.values import is_blended, HyundaiFlags, HyundaiSafetyFlags, CAR, DBC, Buttons, CarControllerParams
 from opendbc.car.interfaces import CarStateBase
-from opendbc.car.dashboard_speed_limit import Tracker as LimitTracker, hyundai_canfd_sign, parser_expiry
+from opendbc.car.dashboard_speed_limit import Tracker as LimitTracker, hyundai_can_sign, hyundai_canfd_sign, parser_expiry, Status as LimitStatus
 
 ButtonType = structs.CarState.ButtonEvent.Type
 
@@ -130,6 +130,12 @@ class CarState(CarStateBase):
     self.ccnc_162_ts_ns = 0
     self.ccnc_1b5_ts_ns = 0
     self.dashboard_limit = LimitTracker()
+    # Classic CAN only: CAN-FD uses FR_CMR_02, and blended cars read the pt bus from ECAN.
+    # There is no fingerprint here, so the sources are subscribed (non-gating) wherever they could exist and
+    # a source that never transmits simply never produces a parser timestamp. The Stinger's 8-byte 0x53E and
+    # the Ray EV's camera traffic are not LKAS12, so those cars never subscribe to it.
+    self.can_limit_sources = not (CP.flags & HyundaiFlags.CANFD) and not is_blended(CP)
+    self.can_limit_camera = self.can_limit_sources and CP.carFingerprint not in (CAR.KIA_STINGER_2022, CAR.KIA_RAY_EV)
     self.ioniq6_bsm_sources = (Ioniq6BlindspotSources()
                                if CP.carFingerprint == CAR.HYUNDAI_IONIQ_6 and CP.openpilotLongitudinalControl else None)
     self.ioniq6_bsm_now_ns = 0
@@ -403,6 +409,9 @@ class CarState(CarStateBase):
 
     ret.blockPcmEnable = not self.recent_button_interaction()
 
+    if self.can_limit_sources:
+      self.update_can_dashboard_limit(cp, cp_cam)
+
     # low speed steer alert hysteresis logic (only for cars with steer cut off above 10 m/s)
     if ret.vEgo < (self.CP.minSteerSpeed + 2.) and self.CP.minSteerSpeed > 10.:
       self.low_speed_alert = True
@@ -606,6 +615,24 @@ class CarState(CarStateBase):
 
     return ret
 
+  def update_can_dashboard_limit(self, cp, cp_cam):
+    # Camera TSR is preferred while it shows a limit; otherwise the navigation limit. A source only
+    # counts once the parser has received one of its packets, and the tracker advances on new packets only.
+    nav_ts, nav_expiry = parser_expiry(cp, "Navi_HU", "SpeedLim_Nav_Clu")
+    cam_ts, cam_expiry = parser_expiry(cp_cam, "LKAS12", "CF_Lkas_TsrSpeed_Display_Clu") if self.can_limit_camera else (0, 0)
+    sample_ns = max(nav_ts, cam_ts)
+    if sample_ns <= self.dashboard_limit.observation.observed_ns:
+      return
+
+    status, value_mps, expiry = LimitStatus.UNKNOWN, 0.0, 0
+    if cam_ts and cam_expiry > sample_ns:
+      status, value_mps = hyundai_can_sign(int(cp_cam.vl["LKAS12"]["CF_Lkas_TsrSpeed_Display_Clu"]), self.is_metric)
+      expiry = cam_expiry
+    if status is not LimitStatus.VALID and nav_ts:
+      status, value_mps = hyundai_can_sign(int(cp.vl["Navi_HU"]["SpeedLim_Nav_Clu"]), self.is_metric)
+      expiry = nav_expiry
+    self.dashboard_limit.update(sample_ns, status, value_mps, valid_until_ns=expiry)
+
   def get_can_parsers_canfd(self, CP):
     msgs = []
     if ev9_long_qualified(CP) or pe_long_qualified(CP):
@@ -731,6 +758,10 @@ class CarState(CarStateBase):
       msgs.extend((name, 0) for name in {available_msg, enabled_msg, speed_msg})
       if not CP.flags & HyundaiFlags.NON_SCC_NO_FCA:
         (msgs if CP.flags & HyundaiFlags.NON_SCC_RADAR_FCA else cam_msgs).append(("FCA11", math.nan))
+    # Non-gating (NaN): absent on many cars, and must never affect canValid.
+    msgs.append(("Navi_HU", math.nan))
+    if CP.carFingerprint not in (CAR.KIA_STINGER_2022, CAR.KIA_RAY_EV):
+      cam_msgs.append(("LKAS12", math.nan))
     parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, 0),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], cam_msgs, 2),
