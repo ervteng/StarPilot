@@ -611,6 +611,47 @@ def test_hyundai_lkas_button_can_start_aol_before_normal_engagement(monkeypatch,
   assert ret.pauseLateral is False
 
 
+def test_hyundai_reengagement_clears_lkas_pause_lateral(monkeypatch, tmp_path):
+  monkeypatch.setattr(spc, "Params", FakeParams)
+  monkeypatch.setattr(spc, "ERROR_LOGS_PATH", tmp_path)
+
+  card = spc.StarPilotCard(
+    SimpleNamespace(brand="hyundai"),
+    SimpleNamespace(alternativeExperience=spc.ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL),
+  )
+  toggles = make_toggles(always_on_lateral=True, always_on_lateral_lkas=True)
+  starpilot_car_state = SimpleNamespace(distancePressed=False)
+  sm = make_sm()
+
+  # Engaged with cruise enabled
+  sm["selfdriveState"].active = True
+  car_state = make_car_state(available=True, enabled=True)
+  ret = card.update(car_state, starpilot_car_state, sm, toggles)
+  assert ret.alwaysOnLateralAllowed is True
+  assert ret.pauseLateral is False
+
+  # LKAS press makes pause_lateral True
+  car_state.buttonEvents = [SimpleNamespace(type=spc.ButtonType.lkas, pressed=True)]
+  ret = card.update(car_state, starpilot_car_state, sm, toggles)
+  assert ret.alwaysOnLateralAllowed is False
+  assert ret.pauseLateral is True
+
+  # Disengage
+  car_state.buttonEvents = []
+  car_state.cruiseState.enabled = False
+  sm["selfdriveState"].active = False
+  ret = card.update(car_state, starpilot_car_state, sm, toggles)
+  assert ret.alwaysOnLateralAllowed is False
+  assert ret.pauseLateral is True
+
+  # Re-engage (selfdriveState.active rising edge) leads to always_on_lateral_allowed True AND pause_lateral False
+  sm["selfdriveState"].active = True
+  car_state.cruiseState.enabled = True
+  ret = card.update(car_state, starpilot_car_state, sm, toggles)
+  assert ret.alwaysOnLateralAllowed is True
+  assert ret.pauseLateral is False
+
+
 def test_volvo_aol_stays_disabled_even_with_stale_enabled_toggle(monkeypatch, tmp_path):
   monkeypatch.setattr(spc, "Params", FakeParams)
   monkeypatch.setattr(spc, "ERROR_LOGS_PATH", tmp_path)

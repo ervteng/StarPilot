@@ -419,6 +419,9 @@ class StarPilotCard:
         self.hyundai_aol_ready = True
       self.tesla_aol_brake_disengaged = False
       self.always_on_lateral_allowed = True
+      # Re-enabling AOL on engagement must also clear the pause that the LKAS
+      # AOL-off toggle set; otherwise lateral stays paused.
+      self.pause_lateral = False
 
     tesla_screen_tap_enabled = self.tesla_screen_button and getattr(starpilot_toggles, "tesla_aol_screen_tap", False)
     if tesla_screen_tap_enabled:
