@@ -167,3 +167,11 @@ class TestG90LeadInputs(unittest.TestCase):
     self.assertEqual(parser.vl['SCC11']['ACC_ObjRelSpd'], -.5)
     self.assertEqual(parser.vl['SCC14']['ObjDistStat'], 2)
 
+
+  def test_stinger_2022_binds_provider_and_stock_long_stinger_does_not(self):
+    messages = RadarMessages(auto=True)
+    for car, alpha, bound in ((CAR.KIA_STINGER_2022, True, True), (CAR.KIA_STINGER_2022, False, False), (CAR.HYUNDAI_SONATA, True, False)):
+      ci = CarInterface(params(car, alpha))
+      with patch.object(radar_lead_context.messaging, 'SubMaster', return_value=messages):
+        configure_controller(ci, None)
+      self.assertEqual(isinstance(ci.CC.g90_lead_inputs, g90_lead.G90LeadInputs), bound, (car, alpha))
