@@ -138,6 +138,22 @@ class TestStingerRadar:
     assert radar_data2 is not None
     assert len(radar_data2.points) == 0
 
+  def test_error_cycle_discards_objects(self):
+    CP = CarInterface.get_params(CAR.KIA_STINGER_2022, stinger_fingerprint(), [], False, False, False)
+    radar = RadarInterface(CP)
+    packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
+
+    # An object decoded while the cycle errors out (no wheel speed yet) is not carried into the next cycle
+    error_frames = [(0x238 + i, payload, 1) for i, payload in enumerate(GOLDEN)] + [(0x255, bytes(8), 1)]
+    error_data = radar.update([(1_000_000_000, error_frames)])
+    assert error_data is not None and error_data.errors.canError
+
+    whl_msg = packer.make_can_msg("WHL_SPD11", 0, {"WHL_SPD_FL": 50.0, "WHL_SPD_FR": 50.0, "WHL_SPD_RL": 50.0, "WHL_SPD_RR": 50.0})
+    radar_data = radar.update([(1_050_000_000, [(whl_msg[0], whl_msg[1], 0), (0x255, bytes(8), 1)])])
+    assert radar_data is not None
+    assert not radar_data.errors.canError
+    assert len(radar_data.points) == 0
+
   def test_no_trigger_no_output(self):
     CP = CarInterface.get_params(CAR.KIA_STINGER_2022, stinger_fingerprint(), [], False, False, False)
     radar = RadarInterface(CP)

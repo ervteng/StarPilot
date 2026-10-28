@@ -250,6 +250,8 @@ class RadarInterface(RadarInterfaceBase):
   def _update_stinger_2022(self):
     ret = structs.RadarData()
     if not self.rcp.can_valid or self.rcp.ts_nanos["WHL_SPD11"]["WHL_SPD_FL"] == 0:
+      # objects decoded in an error cycle must not be published in the next one
+      self.stinger_2022_objects.clear()
       ret.errors.canError = True
       return ret
 
