@@ -106,7 +106,8 @@ class Stinger2022ObjectDecoder:
     self.frames: dict[tuple[int, int], tuple[int, bytes]] = {}
 
   def update(self, timestamp_ns: int, address: int, dat: bytes, bus: int) -> Stinger2022CandidateObject | None:
-    if bus != STINGER_2022_RADAR_BUS or not STINGER_2022_RADAR_START_ADDR <= address < STINGER_2022_RADAR_START_ADDR + STINGER_2022_RADAR_MSG_COUNT or len(dat) != 8:
+    end_addr = STINGER_2022_RADAR_START_ADDR + STINGER_2022_RADAR_MSG_COUNT
+    if bus != STINGER_2022_RADAR_BUS or not STINGER_2022_RADAR_START_ADDR <= address < end_addr or len(dat) != 8:
       return None
     slot, part = divmod(address - STINGER_2022_RADAR_START_ADDR, 3)
     self.frames[slot, part] = (timestamp_ns, dat)
