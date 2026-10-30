@@ -30,6 +30,7 @@ from opendbc.car.hyundai.classic_long_aol import AOL_EXPERIENCE, qualified as qu
 from opendbc.car.hyundai.canfd_stock_aol import qualified as qualified_canfd_stock_aol, qualified_long as qualified_canfd_long_aol
 from opendbc.car.hyundai.ev6_aol import qualified as qualified_ev6_aol
 from opendbc.car.hyundai.g90_longitudinal import G90LongitudinalPolicy
+from opendbc.car.hyundai.stinger_brake_delivery import StingerBrakeDelivery, qualified as stinger_brake_delivery_qualified
 from opendbc.car.hyundai.gv70_longitudinal import is_gv70, scc_request, suppress_stock_cancel
 from opendbc.car.hyundai.g90_lead import G90LeadState, eligible as g90_lead_eligible
 from opendbc.car.hyundai.gv70_camera_lead import eligible as gv70_lead_eligible
@@ -154,6 +155,7 @@ class CarController(CarControllerBase):
     self.g90_lead_state = G90LeadState() if g90_lead_eligible(CP) else None
     self.g90_longitudinal = (G90LongitudinalPolicy()
                               if CP.carFingerprint == CAR.GENESIS_G90 and CP.openpilotLongitudinalControl else None)
+    self.stinger_brake_delivery = StingerBrakeDelivery() if stinger_brake_delivery_qualified(CP) else None
     ioniq6_status = (self.ioniq6_longitudinal is not None and
                      int(CP.safetyConfigs[-1].safetyParam) in (0x8015, 0x8095, 0x8815, 0x8895))
     self.ioniq6_bsm_enabled = ioniq6_status
@@ -246,6 +248,9 @@ class CarController(CarControllerBase):
       stopping = self.ioniq6_accel_request.stopping
     if self.g90_longitudinal is not None:
       accel = self.g90_longitudinal.update(accel, CS.out.vEgo, actuators.longControlState, self.CP.openpilotLongitudinalControl)
+    if self.stinger_brake_delivery is not None:
+      accel = self.stinger_brake_delivery.update(accel, CS.out.vEgo, actuators.longControlState,
+                                                 CC.enabled and CC.longActive, CC.cruiseControl.override)
     set_speed_in_units = hud_control.setSpeed * (CV.MS_TO_KPH if CS.is_metric else CV.MS_TO_MPH)
 
     can_sends = []
