@@ -132,6 +132,15 @@ def create_lfahda_mfc(packer, enabled, *, lfa_icon=None):
   return packer.make_can_msg("LFAHDA_MFC", 0, values)
 
 
+# Kia Stinger 2022 with openpilot long: report AEB as on so the dash doesn't light the "AEB disabled" warning
+# (openpilot long disables the radar, so factory AEB is really off; the user chose to hide the light).
+# FCA_Status 2 matches stock (route 00000028--297af64c9c: 2 in all 6,082 FCA11 frames, segs 0 and 10).
+# FCA_USM 2 is the value FireStar's StarPilot sends (712aa081bc); it kept the light off on this car in
+# archive/stinger-combined-final. Stock sends 3 (likely the cluster's FCA setting), untested with openpilot long.
+def fca_aeb_status(CP):
+  return 2 if CP.carFingerprint == CAR.KIA_STINGER_2022 else 1  # 1: AEB disabled
+
+
 def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, set_speed, stopping, long_override, use_fca, CP, *, lead_data=None):
   commands = []
   if lead_data is not None and not g90_lead_eligible(CP):
@@ -193,7 +202,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
       "FCA_DrvSetStatus": 1,
-      "FCA_Status": 1,  # AEB disabled
+      "FCA_Status": fca_aeb_status(CP),
     }
     fca11_dat = packer.make_can_msg("FCA11", 0, fca11_values)[1]
     fca11_values["CR_FCA_ChkSum"] = hyundai_checksum(fca11_dat[:7])
@@ -217,7 +226,7 @@ def create_acc_opt(packer, CP):
   if not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca12_values = {
       "FCA_DrvSetState": 2,
-      "FCA_USM": 1, # AEB disabled
+      "FCA_USM": fca_aeb_status(CP),
     }
     commands.append(packer.make_can_msg("FCA12", 0, fca12_values))
 
