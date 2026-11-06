@@ -78,7 +78,8 @@ class LeadObservation:
 
 def eligible(cp):
   from opendbc.car.hyundai.values import CAR
-  return (cp.carFingerprint == CAR.GENESIS_G90 and cp.openpilotLongitudinalControl and
+  # Cars whose SCC11/SCC14 lead fields drive the dash/HUD lead display. Others keep the fixed placeholder.
+  return (cp.carFingerprint in (CAR.GENESIS_G90, CAR.KIA_STINGER_2022) and cp.openpilotLongitudinalControl and
           not cp.passive and not cp.dashcamOnly and not cp.notCar)
 
 
