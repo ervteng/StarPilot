@@ -70,6 +70,8 @@ DESCRIPTIONS = {
   'RedneckCruise': 'Adjusts conventional factory cruise with Resume and Set after the next startup.',
   'LowSpeedCruiseOnSet': ('Uses the vehicle’s minimum engagement speed as the floor when pressing SET with StarPilot cruise. ' +
                          'SET uses your current speed when you are above that floor.'),
+  'PersonalityAccelBoost': ('Adds a small acceleration boost by driving personality in Experimental mode. ' +
+                            'Leads, stops and vehicle limits still apply.'),
   'ExperimentalSpeedNudge': ('Gently recovers toward set speed when Experimental mode hesitates on a clear road. ' +
                             'Leads, stops, curve limits and driver overrides retain priority.'),
   'FasterLeadTakeoff': ('Improves launches from a stop and responds sooner when a lead starts moving. ' +

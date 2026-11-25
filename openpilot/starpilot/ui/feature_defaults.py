@@ -5,6 +5,7 @@ from openpilot.starpilot.curve_speed.preferences import MASTER_KEY as CURVE_MAST
 from openpilot.starpilot.lateral.lane_centering import STRENGTH_MAX
 from openpilot.starpilot.longitudinal.downhill_coast import KEY as DOWNHILL_KEY, SURPLUS_KEY, MAX_SURPLUS_MPH
 from openpilot.starpilot.longitudinal.encouragement import KEY as NUDGE_KEY
+from openpilot.starpilot.longitudinal.personality_accel_boost import KEY as PERSONALITY_BOOST_KEY
 from openpilot.starpilot.longitudinal.lead_approach_runtime import KEY as LEAD_APPROACH_KEY
 from openpilot.starpilot.longitudinal.lead_takeoff_preferences import KEY as LEAD_TAKEOFF_KEY
 from openpilot.starpilot.longitudinal.planner_selection import KEY as PLANNER_SELECTION_KEY
@@ -33,6 +34,7 @@ BOOL_DEFAULTS = {
   LEAD_TAKEOFF_KEY: False,
   DOWNHILL_KEY: False,
   NUDGE_KEY: True,
+  PERSONALITY_BOOST_KEY: False,
   LOW_SPEED_CRUISE_ON_SET: False,
   "DisengageOnAccelerator": False,
   AGGRESSIVE_COOLING_KEY: False,
