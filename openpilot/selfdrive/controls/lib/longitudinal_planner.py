@@ -397,8 +397,6 @@ class LongitudinalPlanner:
       self.CP, self.v_desired_trajectory, CONTROL_N_T_IDX, action_t,
       fallback=should_stop(v_ego, output_a_target_mpc, self.stop_speed))
     output_a_target_e2e = sm['modelV2'].action.desiredAcceleration
-    if personality_boost_enabled:
-      output_a_target_e2e += personality_accel_boost(v_ego, output_a_target_e2e, sm['selfdriveState'].personality)
     output_should_stop_e2e = sm['modelV2'].action.shouldStop
     if (self.force_stop_plan.resume_override and not self.force_stop_plan.forcing and
         not self.force_stop_plan.should_stop and not reset_state and not self.fcw and self.allow_throttle and
@@ -566,6 +564,8 @@ class LongitudinalPlanner:
                    curve.effective_mps is not None or traffic_mode is not False))
     manual_model = self.accel_boost.update(sm, output_a_target_e2e, output_a_target_mpc, self.a_cruise)
     output_a_target_e2e = max(manual_model, encouraged_model)
+    if personality_boost_enabled:
+      output_a_target_e2e += personality_accel_boost(v_ego, output_a_target_e2e, sm['selfdriveState'].personality)
 
     candidates = [(output_a_target_mpc, self.mpc.source, output_should_stop_mpc),
                   (self.a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]
