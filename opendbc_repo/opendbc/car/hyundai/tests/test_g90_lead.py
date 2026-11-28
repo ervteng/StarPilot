@@ -55,7 +55,8 @@ class TestG90Lead(unittest.TestCase):
             self.assertEqual(old, new)
         parser = CANParser(DBC[cp.carFingerprint][Bus.pt], [('FCA11', 0), ('SCC12', 0)], 0)
         parser.update([(1_000_000_000, changed)])
-        self.assertEqual(parser.vl['FCA11']['FCA_Status'], 1)
+        # Stinger 2022 reports AEB as on (2) to hide the dash light; see fca_aeb_status.
+        self.assertEqual(parser.vl['FCA11']['FCA_Status'], 2 if car == CAR.KIA_STINGER_2022 else 1)
         non_fca = create_acc_commands(CANPacker(DBC[cp.carFingerprint][Bus.pt]), True, .2, 1., 7,
                                       hud, 70., False, False, False, cp, lead_data=lead)
         parser.update([(1_010_000_000, non_fca)])
