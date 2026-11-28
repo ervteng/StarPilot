@@ -14,6 +14,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.accel_boost import AccelBoost
 from openpilot.starpilot.longitudinal.encouragement import Encouragement
+from openpilot.starpilot.longitudinal.personality_accel_boost import personality_accel_boost
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (LongitudinalMpc, LongitudinalPlanSource, get_T_FOLLOW, get_jerk_factor,
                                                                                       qualified_model_leads, ModelLeadHistory, should_trigger_planner_fcw)
@@ -193,7 +194,8 @@ class LongitudinalPlanner:
              lead_approach_key: LeadApproachKey | None = None,
              force_stop_provider: Callable[[float], StopPlan] | None = None,
              faster_lead_takeoff: bool = False, takeoff_drive_id: int = 0,
-             now_ns: int | None = None, drive_id: int = 0, wheel_coast=None, experimental_speed_nudge: bool = True):
+             now_ns: int | None = None, drive_id: int = 0, wheel_coast=None, experimental_speed_nudge: bool = True,
+             personality_boost_enabled: bool = False):
     if curve_ceiling is not None and curve_provider is not None:
       raise ValueError('choose explicit Curve ceiling or same-cycle provider')
     if self.plan_drive_id != drive_id:
@@ -562,6 +564,8 @@ class LongitudinalPlanner:
                    curve.effective_mps is not None or traffic_mode is not False))
     manual_model = self.accel_boost.update(sm, output_a_target_e2e, output_a_target_mpc, self.a_cruise)
     output_a_target_e2e = max(manual_model, encouraged_model)
+    if personality_boost_enabled:
+      output_a_target_e2e += personality_accel_boost(v_ego, output_a_target_e2e, sm['selfdriveState'].personality)
 
     candidates = [(output_a_target_mpc, self.mpc.source, output_should_stop_mpc),
                   (self.a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]

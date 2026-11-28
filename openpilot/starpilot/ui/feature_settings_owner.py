@@ -27,6 +27,7 @@ from openpilot.starpilot.longitudinal.profile_runtime import TRAFFIC_CRUISE_BRAK
 from openpilot.starpilot.longitudinal.lead_approach_runtime import KEY as LEAD_APPROACH_KEY
 from openpilot.starpilot.longitudinal.lead_takeoff_preferences import KEY as LEAD_TAKEOFF_KEY
 from openpilot.starpilot.longitudinal.encouragement import KEY as NUDGE_KEY
+from openpilot.starpilot.longitudinal.personality_accel_boost import KEY as PERSONALITY_BOOST_KEY
 from openpilot.starpilot.longitudinal.downhill_coast import KEY as DOWNHILL_KEY, SURPLUS_KEY
 from openpilot.selfdrive.car.cruise import LOW_SPEED_CRUISE_ON_SET
 from openpilot.starpilot.longitudinal.planner_selection import KEY as PLANNER_SELECTION_KEY, save_selection
@@ -91,7 +92,7 @@ from openpilot.starpilot.controllers.toyota_cruise import capability as toyota_c
 
 
 GLOBAL_BOOL_PREFERENCES = frozenset((LEAD_APPROACH_KEY, LEAD_TAKEOFF_KEY, NUDGE_KEY, LOW_SPEED_CRUISE_ON_SET,
-                                     "DisengageOnAccelerator", AGGRESSIVE_COOLING_KEY))
+                                     "DisengageOnAccelerator", AGGRESSIVE_COOLING_KEY, PERSONALITY_BOOST_KEY))
 
 
 def cooling_available() -> bool:
@@ -1260,6 +1261,9 @@ class FeatureSettingsOwner:
       rows.append(self._bool_row(NUDGE_KEY, "Experimental Speed Nudge", self.authority("preferences"),
                                 reason="Gently recovers toward set speed when Experimental mode hesitates on a clear road. " +
                                        "Leads, stops, curve limits and driver overrides retain priority."))
+      rows.append(self._bool_row(PERSONALITY_BOOST_KEY, "Personality Acceleration Boost", self.authority("preferences"),
+                                reason="Adds a small acceleration boost by driving personality in Experimental mode. " +
+                                       "Leads, stops and vehicle limits still apply."))
       downhill_allowed = allowed and self.authority("long") and self._value(PLANNER_SELECTION_KEY)[0] == "1"
       downhill = self._bool_row(DOWNHILL_KEY, "Coast Downhills", downhill_allowed,
                                 "Lets gravity carry the car above set speed without targeting a higher speed. Changes apply while driving.")

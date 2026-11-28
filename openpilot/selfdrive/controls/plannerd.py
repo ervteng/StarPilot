@@ -20,6 +20,7 @@ from openpilot.starpilot.longitudinal.experimental_release import ConditionalHan
 from openpilot.starpilot.longitudinal.lead_approach import LeadApproachKey
 from openpilot.starpilot.longitudinal.lead_takeoff_preferences import TakeoffPreferences
 from openpilot.starpilot.longitudinal.encouragement import NudgePreferences
+from openpilot.starpilot.longitudinal.personality_accel_boost import PersonalityAccelBoostPreferences
 from openpilot.starpilot.longitudinal.force_stop_runtime import ForceStopRuntime
 from openpilot.starpilot.longitudinal.stop_resume import collect_resume
 from openpilot.starpilot.longitudinal.lead_approach_runtime import LeadApproachPreferences
@@ -232,14 +233,16 @@ def update_curve_frame(planner: LongitudinalPlanner, sm, CP, now_ns: int, *, hos
                        event: CurveDriverEvent | None = None, lane_change_policy=None,
                        global_braking_response: str | None = None, selected_profiles=None, conditional_handoff: ConditionalHandoff | None = None,
                        lead_approach_key: LeadApproachKey | None = None, force_stop_provider=None,
-                       faster_lead_takeoff: bool = False, wheel_coast=None, experimental_speed_nudge: bool = True):
+                       faster_lead_takeoff: bool = False, wheel_coast=None, experimental_speed_nudge: bool = True,
+                       personality_boost_enabled: bool = False):
   """One model cycle: MPC chooses follow time, then Curve samples and receives winner feedback."""
   if host is None:
     planner.update(sm, cruise_ceiling=cruise_ceiling, profile_tuning=profile_tuning, traffic_mode=traffic_mode,
                    lane_change_policy=lane_change_policy, global_braking_response=global_braking_response, selected_profiles=selected_profiles,
                    conditional_handoff=conditional_handoff, lead_approach_key=lead_approach_key,
                    force_stop_provider=force_stop_provider, faster_lead_takeoff=faster_lead_takeoff, wheel_coast=wheel_coast,
-                   takeoff_drive_id=drive_id, now_ns=now_ns, drive_id=drive_id, experimental_speed_nudge=experimental_speed_nudge)
+                   takeoff_drive_id=drive_id, now_ns=now_ns, drive_id=drive_id, experimental_speed_nudge=experimental_speed_nudge,
+                   personality_boost_enabled=personality_boost_enabled)
     return None
   results = []
   def provider(follow_time_s: float | None):
@@ -252,7 +255,8 @@ def update_curve_frame(planner: LongitudinalPlanner, sm, CP, now_ns: int, *, hos
                  curve_provider=provider, traffic_mode=traffic_mode, lane_change_policy=lane_change_policy,
                  global_braking_response=global_braking_response, selected_profiles=selected_profiles, conditional_handoff=conditional_handoff,
                  lead_approach_key=lead_approach_key, force_stop_provider=force_stop_provider, faster_lead_takeoff=faster_lead_takeoff, wheel_coast=wheel_coast,
-                   takeoff_drive_id=drive_id, now_ns=now_ns, drive_id=drive_id, experimental_speed_nudge=experimental_speed_nudge)
+                   takeoff_drive_id=drive_id, now_ns=now_ns, drive_id=drive_id, experimental_speed_nudge=experimental_speed_nudge,
+                   personality_boost_enabled=personality_boost_enabled)
   confirm_curve_frame(host, planner, now_ns)
   return results[0] if results else None
 
@@ -341,6 +345,7 @@ def starpilot_main():
   if downhill_available and 'REPLAY' in os.environ:
     longitudinal_planner.downhill_surplus_mps = read_surplus(params)
   nudge_preferences = NudgePreferences(params)
+  personality_boost_preferences = PersonalityAccelBoostPreferences(params)
   # Saved-on features start only for a finalized, supported driving owner. Their
   # current-source and longitudinal authority checks still run every frame.
   slc_available = slc_transport_capable(CP, os.environ)
@@ -566,7 +571,8 @@ def starpilot_main():
                                           lead_approach_key=lead_approach_key, force_stop_provider=force_stop_provider,
                                           drive_id=current_start_ns, event=curve_event,
                                           faster_lead_takeoff=faster_lead_takeoff, wheel_coast=(wheel_coast, params),
-                                          experimental_speed_nudge=nudge_preferences.sample(now_ns))
+                                          experimental_speed_nudge=nudge_preferences.sample(now_ns),
+                                          personality_boost_enabled=personality_boost_preferences.sample(now_ns))
         if curve_preferences is not None and curve_host is not None and curve_result is not None:
           curve_preferences.persist(curve_host, curve_result, now_ns)
           assert curve_status is not None
